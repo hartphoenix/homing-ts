@@ -13,3 +13,16 @@ are never revised downward.
 Committed estimate: **3,900,000**
 
 This is a conservative dispatch ledger, not measured subscription usage.
+
+## Capacity snapshot
+
+`$codex-usage` at 2026-08-20T19:01:03Z reported the general Codex pool at 84% remaining in its
+7-day window, resetting 2026-08-26T18:55:22Z. It exposed no 5-hour or monthly window for that pool.
+The separately metered Spark pool was unused and is not counted as general-pool headroom. Recheck
+before every new dispatch; this snapshot is historical only.
+
+## Legacy evidence
+
+The Django suite was run once without its cache provider: 302 tests and 450 subtests passed in
+61.98 seconds. It is behavioral evidence, not a replacement acceptance gate, and will not be
+ported wholesale.
