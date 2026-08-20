@@ -1,0 +1,17 @@
+.git
+.github
+.cache
+.orchestrator
+.env
+.env.*
+backups
+coverage
+dist
+docs
+node_modules
+playwright-report
+test-results
+tests
+*.log
+__pycache__
+*.pyc
