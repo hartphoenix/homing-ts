@@ -7,6 +7,10 @@ import * as schema from "./schema";
 let queryClient: ReturnType<typeof postgres> | undefined;
 
 export function getDatabase() {
+  return drizzle(getSqlClient(), { schema });
+}
+
+export function getSqlClient(): ReturnType<typeof postgres> {
   queryClient ??= postgres(getConfig().DATABASE_URL, {
     max: 10,
     prepare: false,
@@ -14,7 +18,7 @@ export function getDatabase() {
     connect_timeout: 10,
     onnotice: () => undefined,
   });
-  return drizzle(queryClient, { schema });
+  return queryClient;
 }
 
 export async function closeDatabase(): Promise<void> {

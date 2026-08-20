@@ -427,6 +427,13 @@ export const auditEvents = pgTable("audit_events", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+export const migrationRecords = pgTable("migration_records", {
+  sourceProjectId: uuid("source_project_id").primaryKey(),
+  sourceChecksum: varchar("source_checksum", { length: 64 }).notNull(),
+  targetChecksum: varchar("target_checksum", { length: 64 }).notNull(),
+  importedAt: timestamp("imported_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 export type User = typeof users.$inferSelect;
 export type Project = typeof projects.$inferSelect;
 export type Lead = typeof leads.$inferSelect;

@@ -16,6 +16,8 @@
     "test:e2e": "playwright test",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "bun src/server/db/migrate.ts",
+    "db:import-django": "bun src/server/db/import-django.ts",
+    "db:maintenance": "bun src/server/db/maintenance.ts",
     "check": "bun run typecheck && bun run lint && bun run test && bun run build"
   },
   "dependencies": {
