@@ -53,9 +53,9 @@ services:
     environment:
       APP_DOMAIN: ${APP_DOMAIN:?set APP_DOMAIN}
     ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"
+      - "${HOMING_HTTP_PUBLISH:-80}:80"
+      - "${HOMING_HTTPS_PUBLISH:-443}:443"
+      - "${HOMING_HTTPS_UDP_PUBLISH:-443}:443/udp"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
@@ -74,15 +74,15 @@ services:
 
 volumes:
   postgres_data:
-    name: homing-ts-postgres
+    name: ${POSTGRES_VOLUME_NAME:-homing-ts-postgres}
   caddy_data:
-    name: homing-ts-caddy-data
+    name: ${CADDY_DATA_VOLUME_NAME:-homing-ts-caddy-data}
   caddy_config:
-    name: homing-ts-caddy-config
+    name: ${CADDY_CONFIG_VOLUME_NAME:-homing-ts-caddy-config}
 
 networks:
   edge:
-    name: homing-ts-edge
+    name: ${EDGE_NETWORK_NAME:-homing-ts-edge}
   database:
-    name: homing-ts-database
+    name: ${DATABASE_NETWORK_NAME:-homing-ts-database}
     internal: true
