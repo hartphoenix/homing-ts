@@ -6,6 +6,7 @@ import { secureHeaders } from "hono/secure-headers";
 
 import { getDatabase } from "./db/client";
 import { errorResponse, HomingError } from "./http";
+import { requestLogger } from "./logging";
 import type { AppVariables } from "./types";
 
 type AppDependencies = {
@@ -26,6 +27,7 @@ export function createApp(dependencies: AppDependencies = {}) {
   const ready = dependencies.ready ?? databaseReady;
 
   app.use("*", requestId({ headerName: "X-Request-ID", limitLength: 80 }));
+  app.use("*", requestLogger());
   app.use("*", async (context, next) => {
     context.set("requestId", context.get("requestId"));
     await next();
