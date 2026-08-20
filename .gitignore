@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.cache/
+.orchestrator/
+playwright-report/
+test-results/
+coverage/
+*.log
+.env
+.env.*
+!.env.example
+
