@@ -16,6 +16,10 @@ source-plan repair guidance.
 
 Deferred: saved prompts UI, general password-reset UI, public registration, and admin UI.
 
+Account recovery is deliberately CLI-only in the initial release. `bun run db:reset-password --
+--email <address>` requires an interactive TTY, reads the new password without echo or argv/env
+exposure, and writes a pinned Argon2id hash. It is the repair path for unsupported imported hashes.
+
 ## Migration boundary
 
 Migrate user identity/profile/password hashes, active project configuration and UUID, current

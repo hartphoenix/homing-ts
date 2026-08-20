@@ -58,6 +58,8 @@ const rows = await database<ValidationRow[]>`
         from users imported_user
         join target_memberships imported_membership on imported_membership.user_id = imported_user.id
        where split_part(imported_user.password_hash, '$', 1) not in ('argon2', 'pbkdf2_sha256')
+         and imported_user.password_hash not like '$argon2id$%'
+         and imported_user.password_hash not like '$argon2i$%'
          and imported_user.password_reset_required = false
     ) as unsupported_unmarked_passwords,
     (select count(*)::int from agent_tokens) as token_count,
