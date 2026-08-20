@@ -9,8 +9,9 @@ are never revised downward.
 | Auth/session/pairing vertical slice | Focused tests and mountable router | Luna x-high | 900,000 | active | feat/auth-core | — |
 | Project/lead collaboration slice | Focused tests and mountable router | Luna x-high | 1,200,000 | active | feat/collaboration-core | — |
 | Runs/change-feed/kit slice | Focused tests and mountable router | Luna x-high | 1,100,000 | active | feat/agent-core | — |
+| React core journeys | Login, projects, leads, settings, and agent setup shell | Sol | 900,000 | active | main | — |
 
-Committed estimate: **3,900,000**
+Committed estimate: **4,800,000**
 
 This is a conservative dispatch ledger, not measured subscription usage.
 
