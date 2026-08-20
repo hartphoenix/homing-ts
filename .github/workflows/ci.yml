@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: homing-ts-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  application:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:17.5-alpine
+        env:
+          POSTGRES_DB: homing_test
+          POSTGRES_USER: homing
+          POSTGRES_PASSWORD: ci-only-password
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U homing -d homing_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 6
+    env:
+      DATABASE_URL: postgresql://homing:ci-only-password@127.0.0.1:5432/homing_test
+      PUBLIC_ORIGIN: https://homing.example.test
+      AUTH_THROTTLE_KEY: ci-only-throttle-key-with-at-least-32-characters
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.9
+      - name: Install dependencies
+        run: bun install
+      - name: Migration drift
+        run: |
+          bun run db:generate
+          git diff --exit-code -- drizzle
+      - name: Apply migrations
+        run: bun run db:migrate
+      - name: Static checks
+        run: |
+          bun run format:check
+          bun run lint
+          bun run typecheck
+      - name: Unit and integration tests
+        run: bun run test
+      - name: Production client build
+        run: bun run build
+      - name: Vendored Python syntax
+        run: python3 -m py_compile agentkit/package/scripts/*.py
+
+  container:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build production image
+        run: docker build --file Dockerfile --tag homing-ts-ci:check .
+      - name: Validate Compose
+        env:
+          POSTGRES_DB: homing
+          POSTGRES_USER: homing
+          POSTGRES_PASSWORD: config-only-password
+          DATABASE_URL: postgresql://homing:config-only-password@db:5432/homing
+          PUBLIC_ORIGIN: https://homing.example.test
+          AUTH_THROTTLE_KEY: config-only-throttle-key-with-at-least-32-characters
+          APP_DOMAIN: homing.example.test
+        run: docker compose config --quiet
