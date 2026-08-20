@@ -15,6 +15,20 @@
       "when": 1787250680918,
       "tag": "0001_oval_starbolt",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1787257849183,
+      "tag": "0002_new_odin",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1787258036602,
+      "tag": "0003_mushy_hemingway",
+      "breakpoints": true
     }
   ]
 }

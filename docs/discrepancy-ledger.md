@@ -23,3 +23,4 @@ the affected implementation begins.
 | Membership migration | Fresh database would require partner onboarding | Partner need not participate in rewrite | change | Import existing users/project/memberships and rehash passwords on later login. |
 | Lead pagination | Django returns bounded unpaginated results | Existing UI performs poorly at growth | change | Implement bounded cursor pagination from the start. |
 | Dependency audit | drizzle-kit retains a legacy esbuild loader | `bun audit` reports one moderate development-server advisory | keep | Production esbuild is patched; drizzle-kit never runs in production. Recheck on toolchain upgrade. |
+| Kit traversal | Fetch/Hono normalize dot segments before routing | A traversal alias can resolve to another public allowlisted kit file | keep | No request-derived filesystem join exists and traversal cannot escape the public allowlist; the security boundary is file reachability, not rejection of equivalent public paths. |

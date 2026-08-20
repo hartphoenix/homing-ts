@@ -64,12 +64,27 @@ const passwordHash = await Bun.password.hash(first, {
   timeCost: 2,
 });
 const database = getSqlClient();
-const updated = await database<{ id: number }[]>`
-  update users
-     set password_hash = ${passwordHash}, password_reset_required = false, updated_at = now()
-   where lower(email) = ${email}
-   returning id
-`;
-await closeDatabase();
-if (updated.length !== 1) throw new Error("No account matched that email.");
-console.log(JSON.stringify({ event: "password_reset_complete", users: 1 }));
+let updatedCount = 0;
+try {
+  updatedCount = await database.begin(async (transaction) => {
+    const updated = await transaction<{ id: number }[]>`
+      update users
+         set password_hash = ${passwordHash}, password_reset_required = false, updated_at = now()
+       where lower(email) = ${email}
+       returning id
+    `;
+    if (updated.length !== 1 || !updated[0]) {
+      throw new Error("No account matched that email.");
+    }
+    await transaction`delete from sessions where user_id = ${updated[0].id}`;
+    await transaction`
+      update agent_tokens
+         set revoked_at = coalesce(revoked_at, now())
+       where user_id = ${updated[0].id}
+    `;
+    return updated.length;
+  });
+} finally {
+  await closeDatabase();
+}
+console.log(JSON.stringify({ event: "password_reset_complete", users: updatedCount }));

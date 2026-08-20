@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
 import { formatChangeCursor, parseChangeCursor } from "./cursors";
 import { forbidden, notFound, unauthorized, validation } from "./errors";
 import { type AgentPrincipal, hasScope, isUuid, type ProjectAuthorizer } from "./runs";
@@ -32,10 +32,10 @@ export class ChangeService {
   async list(projectId: string, principal: AgentPrincipal | null, search: URLSearchParams) {
     if (!principal) throw unauthorized();
     if (!isUuid(projectId)) throw notFound();
-    if (!hasScope(principal, "projects:read"))
-      throw forbidden("The token does not have projects:read.");
     if (principal.projectIds?.length && !principal.projectIds.includes(projectId)) throw notFound();
     await this.authorize?.(principal, projectId, "projects:read");
+    if (!hasScope(principal, "projects:read"))
+      throw forbidden("The token does not have projects:read.");
     const epoch = await this.repository.feedEpoch(projectId, principal);
     if (!epoch) throw notFound();
     const cursor = parseChangeCursor(search.get("cursor"), epoch);
@@ -80,7 +80,7 @@ export class InMemoryChangeRepository implements ChangeRepository {
 
 export type ChangeRouterOptions = {
   service: ChangeService;
-  principal: (request: Request) => Promise<AgentPrincipal | null> | AgentPrincipal | null;
+  principal: (context: Context) => Promise<AgentPrincipal | null> | AgentPrincipal | null;
 };
 
 export function createChangeRouter(options: ChangeRouterOptions): Hono {
@@ -89,7 +89,7 @@ export function createChangeRouter(options: ChangeRouterOptions): Hono {
     c.json(
       await options.service.list(
         c.req.param("projectId"),
-        await options.principal(c.req.raw),
+        await options.principal(c),
         new URL(c.req.url).searchParams,
       ),
     ),

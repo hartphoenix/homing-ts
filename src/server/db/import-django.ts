@@ -181,8 +181,11 @@ async function importState(state: ImportState, sourceChecksum: string): Promise<
   const target = getSqlClient();
   return target.begin(async (transaction) => {
     await transaction`select pg_advisory_xact_lock(hashtext('homing-ts-django-import'))`;
-    const records = await transaction<{ source_checksum: string; target_checksum: string }[]>`
-      select source_checksum, target_checksum
+    const records = await transaction<
+      { source_checksum: string; target_checksum: string; target_exists: boolean }[]
+    >`
+      select source_checksum, target_checksum,
+             exists(select 1 from projects where id = ${state.project.id}::uuid) as target_exists
         from migration_records
        where source_project_id = ${state.project.id}::uuid
     `;
@@ -191,6 +194,7 @@ async function importState(state: ImportState, sourceChecksum: string): Promise<
       if (existing.source_checksum !== sourceChecksum) {
         throw new Error("Source changed after the recorded import.");
       }
+      if (!existing.target_exists) throw new Error("The recorded import target is missing.");
       return existing.target_checksum;
     }
 

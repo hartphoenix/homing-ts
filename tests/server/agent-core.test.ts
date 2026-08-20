@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+
 import { unzipSync } from "fflate";
 import { Hono } from "hono";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -23,6 +26,42 @@ const principal: AgentPrincipal = {
   scopes: ["projects:read", "runs:write"],
   projectIds: [PROJECT_ID],
 };
+
+function centralDirectory(bytes: Uint8Array) {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let eocd = bytes.byteLength - 22;
+  while (eocd >= 0 && view.getUint32(eocd, true) !== 0x06054b50) eocd -= 1;
+  if (eocd < 0) throw new Error("ZIP end-of-central-directory record is missing.");
+  const count = view.getUint16(eocd + 10, true);
+  let offset = view.getUint32(eocd + 16, true);
+  const entries: Array<{
+    name: string;
+    compression: number;
+    modifiedTime: number;
+    modifiedDate: number;
+    os: number;
+    mode: number;
+  }> = [];
+  for (let index = 0; index < count; index += 1) {
+    if (view.getUint32(offset, true) !== 0x02014b50)
+      throw new Error("ZIP central-directory entry is malformed.");
+    const nameLength = view.getUint16(offset + 28, true);
+    const extraLength = view.getUint16(offset + 30, true);
+    const commentLength = view.getUint16(offset + 32, true);
+    const madeBy = view.getUint16(offset + 4, true);
+    const attributes = view.getUint32(offset + 38, true);
+    entries.push({
+      name: new TextDecoder().decode(bytes.subarray(offset + 46, offset + 46 + nameLength)),
+      compression: view.getUint16(offset + 10, true),
+      modifiedTime: view.getUint16(offset + 12, true),
+      modifiedDate: view.getUint16(offset + 14, true),
+      os: madeBy >> 8,
+      mode: attributes >>> 16,
+    });
+    offset += 46 + nameLength + extraLength + commentLength;
+  }
+  return entries;
+}
 
 function testApp(options: {
   runs?: RunService;
@@ -143,6 +182,16 @@ describe("agent run lifecycle", () => {
     expect(stored?.claimTokenDigest).toMatch(/^[0-9a-f]{64}$/);
     expect(JSON.stringify(stored)).not.toContain(token);
 
+    const duplicateClaim = await app.request(
+      `/api/v1/projects/${PROJECT_ID}/search-runs/${firstId}/claim`,
+      { method: "POST" },
+    );
+    expect(duplicateClaim.status).toBe(409);
+    expect(await body(duplicateClaim)).toMatchObject({
+      error: { code: "run_already_claimed" },
+    });
+    expect(repository.runs.get(firstId)?.claimTokenDigest).toBe(stored?.claimTokenDigest);
+
     const blocked = await app.request(
       `/api/v1/projects/${PROJECT_ID}/search-runs/${secondId}/claim`,
       { method: "POST" },
@@ -186,19 +235,20 @@ describe("agent run lifecycle", () => {
       continuation: {
         protocol: 1,
         worker: "cloud-a",
+        deferred_batches: 2_000_000,
         lanes: [
           {
             lane: "daft:sitemap",
             status: "ok",
-            covered_through: "2026-08-20T12:00:00Z",
+            covered_through: "2026-08-20T12:00:00",
             items_seen: 4,
-            items_new: 1,
+            items_new: 2_000_000,
           },
         ],
         next: "next_page",
         next_query: "drop this deprecated free text",
       },
-      result_counts: { created: 1, trashed: 0, restored: 0 },
+      result_counts: { created: 2_000_000, trashed: 0, restored: 0 },
       summary: "See https://untrusted.example/<script>\rnext",
     };
     const complete = () =>
@@ -213,8 +263,13 @@ describe("agent run lifecycle", () => {
     const firstBody = await body(first);
     expect(firstBody).toMatchObject({
       status: "completed",
-      continuation: { protocol: 1, worker: "cloud-a", next: "next_page" },
-      result_counts: { created: 1, trashed: 0, restored: 0 },
+      continuation: {
+        protocol: 1,
+        worker: "cloud-a",
+        next: "next_page",
+        deferred_batches: 2_000_000,
+      },
+      result_counts: { created: 2_000_000, trashed: 0, restored: 0 },
     });
     expect(JSON.stringify(firstBody)).not.toContain("next_query");
     expect(String(firstBody.summary)).toBe("See [link removed] next");
@@ -222,6 +277,17 @@ describe("agent run lifecycle", () => {
     const replay = await complete();
     expect(replay.status).toBe(200);
     expect(await replay.json()).toEqual(firstBody);
+
+    const newKeyWrongClaim = await app.request(
+      `/api/v1/projects/${PROJECT_ID}/search-runs/${runId}/complete`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Idempotency-Key": "complete-2" },
+        body: JSON.stringify({ ...payload, claim_token: "wrong" }),
+      },
+    );
+    expect(newKeyWrongClaim.status).toBe(409);
+    expect(await body(newKeyWrongClaim)).toMatchObject({ error: { code: "invalid_claim" } });
 
     const changed = await app.request(
       `/api/v1/projects/${PROJECT_ID}/search-runs/${runId}/complete`,
@@ -385,9 +451,37 @@ describe("public unchanged agent kit", () => {
     expect(first.manifest.min_runtime_version).toBe("3.9");
     expect(first.manifest.archive.url).toBe(`https://homing.test/agent/pkg/${first.archiveName}`);
     for (const entry of first.manifest.files) {
-      expect(entry.sha256).toMatch(/^[0-9a-f]{64}$/);
-      expect(typeof entry.first_line).toBe("string");
-      expect(typeof entry.last_line).toBe("string");
+      const bytes = first.files.get(entry.path) as Uint8Array;
+      const text = new TextDecoder().decode(bytes);
+      const lines = text.split(/\r\n|\n|\r/);
+      if (lines.length > 1 && lines.at(-1) === "") lines.pop();
+      expect(entry).toMatchObject({
+        bytes: bytes.byteLength,
+        lines: text.length === 0 ? 0 : lines.length,
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+        first_line: lines[0] ?? "",
+        last_line: lines.at(-1) ?? "",
+      });
+    }
+    expect(first.manifest.archive).toMatchObject({
+      bytes: first.archiveBytes.byteLength,
+      sha256: createHash("sha256").update(first.archiveBytes).digest("hex"),
+    });
+    expect(readFileSync("agentkit/package/scripts/homing.py", "utf8")).toContain(
+      "__HOMING_ORIGIN__",
+    );
+    const zipEntries = centralDirectory(first.archiveBytes);
+    expect(zipEntries.map((entry) => entry.name)).toEqual(
+      first.manifest.files.map((entry) => entry.path),
+    );
+    for (const entry of zipEntries) {
+      expect(entry).toMatchObject({
+        compression: 8,
+        modifiedTime: 0,
+        modifiedDate: 0x21,
+        os: 3,
+        mode: 0o644,
+      });
     }
 
     const app = testApp({ kit: first });
@@ -404,6 +498,12 @@ describe("public unchanged agent kit", () => {
     });
     expect(notModified.status).toBe(304);
     expect(await notModified.text()).toBe("");
+    const star = await app.request("/agent/pkg/SKILL.md", {
+      headers: { "If-None-Match": "*" },
+    });
+    expect(star.status).toBe(304);
+    expect(star.headers.get("etag")).toBe(etag);
+    expect(star.headers.get("cache-control")).toBe("public, max-age=300");
     const head = await app.request("/agent/pkg/SKILL.md", { method: "HEAD" });
     expect(head.status).toBe(200);
     expect(await head.text()).toBe("");
@@ -411,10 +511,13 @@ describe("public unchanged agent kit", () => {
     for (const path of [
       "/agent/pkg/unknown.md",
       "/agent/pkg/references/nested/nope.md",
+      "/agent/pkg/scripts/../../package.json",
+      "/agent/pkg/scripts/%2e%2e/%2e%2e/package.json",
       `/agent/pkg/homing-agent-kit-${first.version + 1}.zip`,
     ]) {
       expect((await app.request(path)).status).toBe(404);
     }
+    expect((await app.request("/agent/pkg/scripts/../SKILL.md")).status).toBe(200);
     expect(
       (
         await app.request("/agent/pkg/SKILL.md", {

@@ -251,9 +251,12 @@ export const searchRuns = pgTable(
     ...timestamps,
   },
   (table) => [
-    uniqueIndex("search_runs_idempotency_uniq")
+    uniqueIndex("search_runs_agent_idempotency_uniq")
+      .on(table.projectId, table.userId, table.tokenId, table.idempotencyKey)
+      .where(sql`${table.idempotencyKey} <> '' and ${table.tokenId} is not null`),
+    uniqueIndex("search_runs_session_idempotency_uniq")
       .on(table.projectId, table.userId, table.idempotencyKey)
-      .where(sql`${table.idempotencyKey} <> ''`),
+      .where(sql`${table.idempotencyKey} <> '' and ${table.tokenId} is null`),
     index("search_runs_active_idx").on(table.projectId, table.status, table.leaseExpiresAt),
   ],
 );
@@ -266,14 +269,14 @@ export const leads = pgTable(
       .notNull()
       .references(() => projects.id, { onDelete: "cascade" }),
     source: varchar("source", { length: 160 }).notNull(),
-    sourceListingId: varchar("source_listing_id", { length: 200 }).notNull().default(""),
+    sourceListingId: varchar("source_listing_id", { length: 300 }).notNull().default(""),
     canonicalUrl: varchar("canonical_url", { length: 2000 }).notNull(),
     identityHash: varchar("identity_hash", { length: 64 }).notNull().default(""),
     sourceUrl: varchar("source_url", { length: 2000 }).notNull().default(""),
     title: varchar("title", { length: 500 }).notNull(),
     summary: text("summary").notNull().default(""),
     location: varchar("location", { length: 500 }).notNull().default(""),
-    priceDisplay: varchar("price_display", { length: 120 }).notNull().default(""),
+    priceDisplay: varchar("price_display", { length: 200 }).notNull().default(""),
     priceAmount: decimal("price_amount", { precision: 10, scale: 2 }),
     priceCurrency: varchar("price_currency", { length: 3 }).notNull().default("USD"),
     availability: varchar("availability", { length: 500 }).notNull().default(""),
@@ -401,12 +404,12 @@ export const idempotencyKeys = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
-    uniqueIndex("idempotency_principal_endpoint_key_uniq").on(
-      table.userId,
-      table.tokenId,
-      table.endpoint,
-      table.key,
-    ),
+    uniqueIndex("idempotency_agent_principal_endpoint_key_uniq")
+      .on(table.userId, table.tokenId, table.endpoint, table.key)
+      .where(sql`${table.tokenId} is not null`),
+    uniqueIndex("idempotency_session_principal_endpoint_key_uniq")
+      .on(table.userId, table.endpoint, table.key)
+      .where(sql`${table.tokenId} is null`),
     index("idempotency_expiry_idx").on(table.expiresAt),
   ],
 );

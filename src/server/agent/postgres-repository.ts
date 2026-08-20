@@ -39,10 +39,18 @@ function optionalDate(value: unknown): Date | null {
   return value === null || value === undefined ? null : date(value);
 }
 
+function iso(value: Date): string {
+  return value.toISOString();
+}
+
 function jsonObject(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
+}
+
+function jsonText(value: unknown): string {
+  return JSON.stringify(value);
 }
 
 function countObject(value: unknown): Record<string, number> {
@@ -121,7 +129,7 @@ async function appendChange(
        tombstone, actor_id, actor_kind, token_id)
     values
       (${projectId}, ${String(sequence)}, ${eventType}, ${objectType}, ${objectId},
-       ${sql.json(payload as postgres.JSONValue)}, false, ${principal.userId},
+       ${jsonText(payload)}::jsonb, false, ${principal.userId},
        ${principal.tokenId ? "agent" : "user"}, ${principal.tokenId ?? null})
   `;
 }
@@ -140,7 +148,7 @@ async function audit(
     values
       (${projectId}, ${action}, 'source_plan_review', ${objectId},
        ${principal.tokenId ? "agent" : "user"}, ${principal.userId},
-       ${principal.tokenId ?? null}, ${sql.json(summary as postgres.JSONValue)})
+       ${principal.tokenId ?? null}, ${jsonText(summary)}::jsonb)
   `;
 }
 
@@ -199,7 +207,7 @@ async function storeIdempotency(
       (user_id, token_id, endpoint, key, request_hash, response_status, response_body, expires_at)
     values
       (${principal.userId}, ${principal.tokenId ?? null}, ${endpoint}, ${key}, ${requestHash},
-       ${responseStatus}, ${sql.json(responseBody as postgres.JSONValue)}, now() + interval '7 days')
+       ${responseStatus}, ${jsonText(responseBody)}::jsonb, now() + interval '7 days')
   `;
 }
 
@@ -277,7 +285,7 @@ export class PostgresAgentRepository
         values
           (${request.projectId}, ${request.userId}, ${request.tokenId}, ${request.agentLabel},
            ${Number(project.prompt_revision)}, ${String(project.current_prompt)},
-           ${sql.json(jsonObject(project.criteria) as postgres.JSONValue)}, ${request.inputCursor}, '')
+           ${jsonText(jsonObject(project.criteria))}::jsonb, ${request.inputCursor}, '')
         returning *
       `;
       const run = mapRun(rows[0] as Row);
@@ -326,12 +334,19 @@ export class PostgresAgentRepository
       `;
       if (!rows[0]) throw notFound();
       const run = mapRun(rows[0]);
+      if (
+        (run.status === "claimed" || run.status === "running") &&
+        run.leaseExpiresAt &&
+        run.leaseExpiresAt > now
+      ) {
+        throw conflict("run_already_claimed", "This run already holds the project lease.");
+      }
       const active = await sql<Row[]>`
         select id from search_runs
          where project_id = ${projectId}
            and id <> ${runId}
            and status in ('claimed', 'running')
-           and lease_expires_at > ${now}
+           and lease_expires_at > ${iso(now)}
          limit 1
       `;
       if (active[0]) throw conflict("run_already_claimed", "Another run holds the project lease.");
@@ -343,10 +358,10 @@ export class PostgresAgentRepository
         update search_runs
            set status = 'claimed',
                lease_owner = ${`${principal.userId}:${principal.tokenId ?? "session"}`},
-               lease_expires_at = ${new Date(now.getTime() + 5 * 60_000)},
+               lease_expires_at = ${iso(new Date(now.getTime() + 5 * 60_000))},
                claim_token_digest = ${digest(claimToken)},
                attempt_count = attempt_count + 1,
-               updated_at = ${now}
+               updated_at = ${iso(now)}
          where id = ${runId}
          returning *
       `;
@@ -389,8 +404,8 @@ export class PostgresAgentRepository
       }
       const updated = await sql<Row[]>`
         update search_runs
-           set status = 'running', lease_expires_at = ${new Date(now.getTime() + 5 * 60_000)},
-               updated_at = ${now}
+           set status = 'running', lease_expires_at = ${iso(new Date(now.getTime() + 5 * 60_000))},
+               updated_at = ${iso(now)}
          where id = ${runId}
          returning *
       `;
@@ -437,29 +452,8 @@ export class PostgresAgentRepository
         return { run, replayed: true };
       }
 
-      const same =
-        run.status === completion.status &&
-        run.outputCursor === completion.outputCursor &&
-        digest(run.continuation) === digest(completion.continuation) &&
-        digest(run.resultCounts) === digest(completion.resultCounts) &&
-        run.summary === completion.summary;
       if (run.status === "completed" || run.status === "failed") {
-        if (!same) {
-          throw conflict(
-            "idempotency_key_reused",
-            "The run was already completed with a different payload.",
-          );
-        }
-        await storeIdempotency(
-          sql,
-          principal,
-          endpoint,
-          completion.idempotencyKey,
-          requestHash,
-          200,
-          serializeRun(run),
-        );
-        return { run, replayed: true };
+        throw conflict("invalid_claim", "Claim token is invalid or expired.");
       }
       if (
         run.claimTokenDigest !== digest(completion.claimToken) ||
@@ -471,9 +465,9 @@ export class PostgresAgentRepository
       const updated = await sql<Row[]>`
         update search_runs
            set status = ${completion.status}, output_cursor = ${completion.outputCursor},
-               continuation = ${sql.json(completion.continuation as postgres.JSONValue)},
-               result_counts = ${sql.json(completion.resultCounts as postgres.JSONValue)}, summary = ${completion.summary},
-               completed_at = ${now}, lease_expires_at = null, updated_at = ${now}
+               continuation = ${jsonText(completion.continuation)}::jsonb,
+               result_counts = ${jsonText(completion.resultCounts)}::jsonb, summary = ${completion.summary},
+               completed_at = ${iso(now)}, lease_expires_at = null, updated_at = ${iso(now)}
          where id = ${runId}
          returning *
       `;
@@ -558,13 +552,13 @@ export class PostgresAgentRepository
         select * from search_runs
          where project_id = ${projectId}
            and left(agent_label, length(${options.agentLabelPrefix})) = ${options.agentLabelPrefix}
-           and (created_at, id) < (${cursor.createdAt}, ${cursor.id})
+           and (created_at, id) < (${iso(cursor.createdAt)}, ${cursor.id})
          order by created_at desc, id desc limit ${options.limit + 1}
       `;
     } else if (cursor) {
       rows = await this.sql<Row[]>`
         select * from search_runs
-         where project_id = ${projectId} and (created_at, id) < (${cursor.createdAt}, ${cursor.id})
+         where project_id = ${projectId} and (created_at, id) < (${iso(cursor.createdAt)}, ${cursor.id})
          order by created_at desc, id desc limit ${options.limit + 1}
       `;
     } else if (options.agentLabelPrefix) {
@@ -641,7 +635,7 @@ export class PostgresAgentRepository
       if (existing[0]) {
         const rows = await sql<Row[]>`
           update source_plan_reviews
-             set observed_prompt_revision = ${promptRevision}, last_reported_at = ${now},
+             set observed_prompt_revision = ${promptRevision}, last_reported_at = ${iso(now)},
                  reported_by_token_id = ${tokenId}
            where id = ${String(existing[0].id)}
            returning *
@@ -665,7 +659,7 @@ export class PostgresAgentRepository
           (id, project_id, user_id, reported_by_token_id, status,
            observed_prompt_revision, opened_at, last_reported_at)
         values
-          (${id}, ${projectId}, ${userId}, ${tokenId}, 'open', ${promptRevision}, ${now}, ${now})
+          (${id}, ${projectId}, ${userId}, ${tokenId}, 'open', ${promptRevision}, ${iso(now)}, ${iso(now)})
         returning *
       `;
       await audit(sql, "source_plan_review.opened", projectId, id, principal, {
@@ -731,7 +725,7 @@ export class PostgresAgentRepository
       }
       const updated = await sql<Row[]>`
         update source_plan_reviews
-           set status = 'resolved', resolved_prompt_revision = ${promptRevision}, resolved_at = ${now}
+           set status = 'resolved', resolved_prompt_revision = ${promptRevision}, resolved_at = ${iso(now)}
          where id = ${review.id}
          returning *
       `;

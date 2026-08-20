@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
 import { conflict, forbidden, notFound, unauthorized, validation } from "./errors";
 import { type AgentPrincipal, hasScope, isUuid, type ProjectAuthorizer } from "./runs";
 
@@ -67,9 +67,9 @@ export class SourcePlanService {
 
   async project(principal: AgentPrincipal, projectId: string): Promise<void> {
     if (!isUuid(projectId)) throw notFound();
-    if (!hasScope(principal, "runs:write")) throw forbidden("The token does not have runs:write.");
     if (principal.projectIds?.length && !principal.projectIds.includes(projectId)) throw notFound();
     await this.authorize?.(principal, projectId, "runs:write");
+    if (!hasScope(principal, "runs:write")) throw forbidden("The token does not have runs:write.");
   }
 
   async list(principal: AgentPrincipal | null) {
@@ -218,7 +218,7 @@ export class InMemorySourcePlanRepository implements SourcePlanRepository {
 
 export type SourcePlanRouterOptions = {
   service: SourcePlanService;
-  principal: (request: Request) => Promise<AgentPrincipal | null> | AgentPrincipal | null;
+  principal: (context: Context) => Promise<AgentPrincipal | null> | AgentPrincipal | null;
   origin: string;
 };
 
@@ -233,10 +233,10 @@ export function createSourcePlanRouter(options: SourcePlanRouterOptions): Hono {
     ) {
       throw validation("Only status=open is supported");
     }
-    return c.json(await options.service.list(await options.principal(c.req.raw)));
+    return c.json(await options.service.list(await options.principal(c)));
   });
   app.post("/projects/:projectId/source-plan-review", async (c) => {
-    const principal = await options.service.principal(await options.principal(c.req.raw));
+    const principal = await options.service.principal(await options.principal(c));
     const result = await options.service.report(
       principal,
       c.req.param("projectId"),
@@ -245,7 +245,7 @@ export function createSourcePlanRouter(options: SourcePlanRouterOptions): Hono {
     return c.json(result.body, result.status as 200 | 201);
   });
   app.post("/projects/:projectId/source-plan-review/:reviewId/resolve", async (c) => {
-    const principal = await options.service.principal(await options.principal(c.req.raw));
+    const principal = await options.service.principal(await options.principal(c));
     return c.json(
       await options.service.resolve(
         principal,
@@ -256,7 +256,7 @@ export function createSourcePlanRouter(options: SourcePlanRouterOptions): Hono {
     );
   });
   app.get("/me/source-plan-repair", async (c) => {
-    const principal = await options.service.principal(await options.principal(c.req.raw));
+    const principal = await options.service.principal(await options.principal(c));
     const items = await options.service.list(principal);
     c.header("Cache-Control", "private, no-store");
     return c.json({

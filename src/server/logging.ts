@@ -4,9 +4,13 @@ import type { AppVariables } from "./types";
 
 const uuidSegment = /\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/gi;
 const invitationSegment = /(\/invitations\/)[^/]+/gi;
+const pairingSegment = /(\/auth\/agent-links\/)[^/]+/gi;
 
 export function redactedPath(path: string): string {
-  return path.replace(invitationSegment, "$1:token").replace(uuidSegment, ":id");
+  return path
+    .replace(invitationSegment, "$1:token")
+    .replace(pairingSegment, "$1:code")
+    .replace(uuidSegment, ":id");
 }
 
 export function requestLogger(

@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
 
 import {
   conflict,
@@ -250,7 +250,7 @@ const resultKeys = new Set([
   "suspected_injection",
   "urls_refused",
 ]);
-const isoTimestamp = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})$/;
+const isoTimestamp = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?$/;
 
 export function validateContinuation(value: unknown): {
   continuation: Continuation;
@@ -274,7 +274,7 @@ export function validateContinuation(value: unknown): {
     out.deferred_batches = boundedInteger(
       value.deferred_batches,
       "continuation.deferred_batches",
-      10_000,
+      Number.MAX_SAFE_INTEGER,
     );
   if ("next" in value) {
     if (typeof value.next !== "string" || !continuationNext.has(value.next as ContinuationNext))
@@ -326,13 +326,13 @@ export function validateContinuation(value: unknown): {
         lane.items_seen = boundedInteger(
           raw.items_seen,
           `continuation.lanes[${index}].items_seen`,
-          1_000_000,
+          Number.MAX_SAFE_INTEGER,
         );
       if ("items_new" in raw)
         lane.items_new = boundedInteger(
           raw.items_new,
           `continuation.lanes[${index}].items_new`,
-          1_000_000,
+          Number.MAX_SAFE_INTEGER,
         );
       return lane;
     });
@@ -349,7 +349,10 @@ export function validateResultCounts(value: unknown): ResultCounts {
   const result = Object.fromEntries(
     Object.keys(value)
       .sort()
-      .map((key) => [key, boundedInteger(value[key], `result_counts.${key}`, 1_000_000)]),
+      .map((key) => [
+        key,
+        boundedInteger(value[key], `result_counts.${key}`, Number.MAX_SAFE_INTEGER),
+      ]),
   );
   if ((result.trashed ?? 0) !== 0 || (result.restored ?? 0) !== 0)
     throw validation("paired agents may not report destructive writes");
@@ -390,9 +393,9 @@ export class RunService {
   ): Promise<AgentPrincipal> {
     if (!principal) throw unauthorized();
     if (!isUuid(projectId)) throw notFound();
-    if (!hasScope(principal, scope)) throw forbidden(`The token does not have ${scope}.`);
     if (principal.projectIds?.length && !principal.projectIds.includes(projectId)) throw notFound();
     await this.authorize?.(principal, projectId, scope);
+    if (!hasScope(principal, scope)) throw forbidden(`The token does not have ${scope}.`);
     return principal;
   }
 
@@ -637,6 +640,13 @@ export class InMemoryRunRepository implements RunRepository {
 
   async claim(projectId: string, runId: string, principal: AgentPrincipal, now: Date) {
     const run = this.runFor(projectId, runId);
+    if (
+      (run.status === "claimed" || run.status === "running") &&
+      run.leaseExpiresAt &&
+      run.leaseExpiresAt > now
+    ) {
+      throw conflict("run_already_claimed", "This run already holds the project lease.");
+    }
     const active = [...this.runs.values()].some(
       (other) =>
         other.projectId === projectId &&
@@ -695,20 +705,8 @@ export class InMemoryRunRepository implements RunRepository {
         );
       return { run: this.runFor(projectId, prior.runId), replayed: true };
     }
-    const same =
-      run.status === completion.status &&
-      run.outputCursor === completion.outputCursor &&
-      digest(run.continuation) === digest(completion.continuation) &&
-      digest(run.resultCounts) === digest(completion.resultCounts) &&
-      run.summary === completion.summary;
     if (run.status === "completed" || run.status === "failed") {
-      if (!same)
-        throw conflict(
-          "idempotency_key_reused",
-          "The run was already completed with a different payload.",
-        );
-      this.completionKeys.set(key, { hash: requestHash, runId });
-      return { run, replayed: true };
+      throw conflict("invalid_claim", "Claim token is invalid or expired.");
     }
     if (
       run.claimTokenDigest !== digest(completion.claimToken) ||
@@ -735,15 +733,15 @@ function parseBody(value: unknown): Record<string, unknown> {
 
 export type RunRouterOptions = {
   service: RunService;
-  principal: (request: Request) => Promise<AgentPrincipal | null> | AgentPrincipal | null;
+  principal: (context: Context) => Promise<AgentPrincipal | null> | AgentPrincipal | null;
 };
 
 export function createRunRouter(options: RunRouterOptions): Hono {
   const app = new Hono();
-  const principalFor = (request: Request) => options.principal(request);
+  const principalFor = (context: Context) => options.principal(context);
   app.all("/projects/:projectId/search-runs", async (c) => {
     const principal = await options.service.check(
-      await principalFor(c.req.raw),
+      await principalFor(c),
       c.req.param("projectId"),
       c.req.method === "GET" ? "projects:read" : "runs:write",
     );
@@ -767,7 +765,7 @@ export function createRunRouter(options: RunRouterOptions): Hono {
   });
   app.get("/projects/:projectId/search-runs/:runId", async (c) => {
     const principal = await options.service.check(
-      await principalFor(c.req.raw),
+      await principalFor(c),
       c.req.param("projectId"),
       "projects:read",
     );
@@ -777,7 +775,7 @@ export function createRunRouter(options: RunRouterOptions): Hono {
   });
   app.post("/projects/:projectId/search-runs/:runId/claim", async (c) => {
     const principal = await options.service.check(
-      await principalFor(c.req.raw),
+      await principalFor(c),
       c.req.param("projectId"),
       "runs:write",
     );
@@ -787,7 +785,7 @@ export function createRunRouter(options: RunRouterOptions): Hono {
   });
   app.post("/projects/:projectId/search-runs/:runId/heartbeat", async (c) => {
     const principal = await options.service.check(
-      await principalFor(c.req.raw),
+      await principalFor(c),
       c.req.param("projectId"),
       "runs:write",
     );
@@ -802,7 +800,7 @@ export function createRunRouter(options: RunRouterOptions): Hono {
   });
   app.post("/projects/:projectId/search-runs/:runId/complete", async (c) => {
     const principal = await options.service.check(
-      await principalFor(c.req.raw),
+      await principalFor(c),
       c.req.param("projectId"),
       "runs:write",
     );
