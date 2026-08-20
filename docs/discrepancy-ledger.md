@@ -22,3 +22,4 @@ the affected implementation begins.
 | Project roles | Older docs call viewers read-only | Current product grants equal content authority | keep | Preserve equal collaborator content rights; owner remains administrative. |
 | Membership migration | Fresh database would require partner onboarding | Partner need not participate in rewrite | change | Import existing users/project/memberships and rehash passwords on later login. |
 | Lead pagination | Django returns bounded unpaginated results | Existing UI performs poorly at growth | change | Implement bounded cursor pagination from the start. |
+| Dependency audit | drizzle-kit retains a legacy esbuild loader | `bun audit` reports one moderate development-server advisory | keep | Production esbuild is patched; drizzle-kit never runs in production. Recheck on toolchain upgrade. |
