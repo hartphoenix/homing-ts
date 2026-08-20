@@ -30,3 +30,10 @@ RESTORE_CONFIRM=YES AGE_IDENTITY_FILE=/path/to/identity ./docker/restore.sh /abs
 Rehearse restore into an isolated database before cutover. Retain the Django encrypted backup,
 database volume, checkout, and image for at least seven days. Rolling traffic back to Django after
 the TypeScript app accepts writes loses those new writes; that is a human cutover decision.
+
+Immediately after importing the frozen Django snapshot, validate the redacted migration boundary:
+
+```sh
+docker compose --env-file .env run --rm --no-deps \
+  -e MIGRATE_PROJECT_ID=<existing-project-uuid> web bun run db:validate-import
+```

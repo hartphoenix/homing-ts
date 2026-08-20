@@ -17,6 +17,7 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "bun src/server/db/migrate.ts",
     "db:import-django": "bun src/server/db/import-django.ts",
+    "db:validate-import": "bun src/server/db/validate-import.ts",
     "db:maintenance": "bun src/server/db/maintenance.ts",
     "check": "bun run typecheck && bun run lint && bun run test && bun run build"
   },
