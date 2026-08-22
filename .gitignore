@@ -6,6 +6,7 @@ backups/
 playwright-report/
 test-results/
 coverage/
+docs/mcp-brief.md
 *.log
 __pycache__/
 *.pyc

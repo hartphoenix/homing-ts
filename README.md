@@ -18,6 +18,12 @@ bun run dev
 Run `bun run dev:client` separately for Vite hot reload. Production serves the built client and API
 from one Bun process behind Caddy.
 
+To use the private Docker rehearsal API while developing the client:
+
+```sh
+HOMING_DEV_PROXY_TARGET=http://127.0.0.1:8081 bun run dev:client
+```
+
 ## Verification
 
 ```sh
@@ -27,4 +33,3 @@ bun run test
 bun run build
 bun run test:e2e
 ```
-
