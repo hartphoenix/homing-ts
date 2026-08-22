@@ -22,9 +22,11 @@ probe_dir() {  # probe_dir <dir> -> prints WRITABLE or DENIED, leaves nothing be
 }
 ```
 
-**Two kinds of destination, never mixed.** Markdown (`homing-check/SKILL.md`, `JUDGE.md`) goes
-to a *skill directory*; scripts, config, state and logs go to the OS application-support / state
-directories below. Never put a runnable script or a state file in a skill directory.
+**Three kinds of destination, never mixed.** The optional interactive facade
+(`homing-check/SKILL.md`) goes to a skill directory. The scheduled worker prompt
+(`prompts/JUDGE.md`) goes under the config directory. Scripts, config, state and logs go to the
+OS application-support / state directories below. Never put a runnable script or state file in a
+skill directory.
 
 **Canonical skill install, then fan out by symlink.**
 
@@ -34,11 +36,13 @@ install -d -m 0755 "$HOME/.agents/skills"                       # canonical
 ln -sfn "$HOME/.agents/skills/homing-check" "$HOME/.claude/skills/homing-check"
 ```
 
-Codex, Gemini CLI, Cursor, Copilot and OpenCode read `~/.agents/skills` natively; Claude Code
-does **not** and needs the symlink. If the symlink target is not writable, install a second copy
+Current Codex, Gemini CLI, Cursor, GitHub Copilot CLI, and OpenCode documentation lists
+`~/.agents/skills` as a user-level discovery root. Treat that as a version-sensitive documented
+capability, not proof that this kit has been exercised in those agents. Claude Code uses its own
+skill root and needs the symlink. If the symlink target is not writable, install a second copy
 there and record both paths plus a content hash in the manifest. On Windows without Developer
 Mode, `New-Item -ItemType SymbolicLink` fails — copy and hash. Claude Code cloud sessions read
-neither: they load account-level skills and the cloned repo's `.claude/skills/` only.
+neither local root.
 
 **The key never appears in a job definition.** `launchctl print`, `systemctl show`,
 `schtasks /query /v` and `docker inspect` all print their environment dictionaries in cleartext
@@ -77,7 +81,7 @@ Syncthing, or a synced `Documents`.
 
 **Never crontab on macOS.** Writing a crontab from a non-interactive process trips TCC
 (`AUTHREQ_ATTRIBUTION`); the setuid `crontab` binary blocks on a consent dialog an unattended
-installer can never answer, and the install hangs forever. `launchctl bootstrap` triggers no TCC
+setup can never answer, and the install hangs forever. `launchctl bootstrap` triggers no TCC
 prompt at all.
 
 **Never a LaunchDaemon.** Daemons run in the system session and cannot read the login keychain
@@ -146,16 +150,16 @@ Write and read with the **same binary**. A language keyring library (Python `key
 upgrade changes the signature and the job starts an un-dismissable 3am password-prompt storm
 that "Always Allow" does not fix, because that edits the ACL, not the partition list.
 
-The installer writes `<config>/connect.sh` (0700, in a 0700 dir) and prints exactly one line
-for the user to run: `sh "<config>/connect.sh"`. That is the pairing path, and it is the one to
-offer: the user approves a short code in their own browser and the key travels from Homing into
-the keychain without anyone typing or seeing it. The wrapper exports the same
+The setup builder writes `<setup>/connect.sh` (0700, in the verified temporary package) and prints
+exactly one line for the user to run: `sh "<setup>/connect.sh"`. That is the pairing path, and it
+is the one to offer: the user approves a short code in their own browser and the key travels from
+Homing into the keychain without anyone typing or seeing it. The wrapper exports the same
 `HOMING_TOKEN_STORE` / `HOMING_KEYCHAIN_SERVICE` / `HOMING_TOKEN_FILE` values the runner
 exports, then calls `homing.py pair-poll --store`; without that export the key lands in the
 platform default, pairing still reports success because its own verifying read is defaulted the
 same way, and the first scheduled run fails with exit 78.
 
-`<config>/set-token.sh` is still written, and it is the **fallback**, not the default: use it
+`<setup>/set-token.sh` is also temporary, and it is the **fallback**, not the default: use it
 only where pairing cannot work — no browser on the machine, or an operator handing over a key
 minted elsewhere. It reads stdin with `stty -echo` + `IFS= read -r`, feeds
 `security add-generic-password -U -a "$USER" -s homing-api-token -w` the value **twice**
@@ -174,7 +178,7 @@ TOKEN=$(perl -e 'alarm shift; exec @ARGV' 20 \
 ```
 
 Exit 44 is `errSecItemNotFound`. Never export `TOKEN`; hand it to `curl` through `--config -` on
-stdin so it never enters argv. If the *installer's own* keychain attempt returns
+stdin so it never enters argv. If the setup process's own keychain attempt returns
 `Operation not permitted` or exit 152, that is the agent's sandbox, **not** a Mac without a
 keychain — route to the human-run path, which is the correct path regardless.
 
@@ -598,9 +602,9 @@ What holds the run at rung 0 is not the OS, and the install report says so in th
   shell, no network of its own, no credential, no other file on the machine;
 * the runner bounds every run from outside the model: wall clock, memory, largest file, kit
   calls per run, writes per run, zero deletes;
-* the install writes only into `<config>`, `<state>` and `<logs>`; `bin/` is 0500, the plan and
-  source list are 0400, and the pairing helper's `<config>/private/` is 0700 and named in no
-  config, state or skill file;
+* the durable install writes only into `<config>`, `<state>` and `<logs>`; `bin/` is 0500 and
+  the plan and source list are 0400. Pairing scratch exists only under the verified temporary
+  `<setup>` package and finalization removes it;
 * pause is one command locally and one click in Homing, which works when the machine is off;
   revocation is in Homing only, and holds even when the machine is out of the person's hands.
 

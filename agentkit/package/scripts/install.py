@@ -1,32 +1,34 @@
 #!/usr/bin/env python3
-"""install.py - the build step of the homing-setup installer.
+"""install.py - the build step of the ephemeral Homing setup package.
 
 Run it. Do not read it into a model's context, and do not hand-edit what it
-writes. It takes the decisions the installer agent already made (Phases 1-6),
+writes. It takes the decisions the setup agent already made (Phases 1-6),
 as one JSON object, and turns them into files, modes, and a scheduler entry.
 
     install.py --help
     install.py --print-config-schema
-    install.py --config plan.json --dry-run
-    install.py --config plan.json
+    install.py --config plan.json --setup-workspace /tmp/homing-agent-kit-ID --dry-run
+    install.py --config plan.json --setup-workspace /tmp/homing-agent-kit-ID
     install.py --pause | --resume | --uninstall
 
 What it creates, with the modes it creates them with:
 
     <config>/                 0700   config.json 0400, sources.json 0400
     <config>/bin/             0500   homing.py, sources.py, cycle.py, run.sh   0500
-    <config>/connect.sh       0700   the one line a person runs; holds no key
-    <config>/set-token.sh     0700   the fallback if pairing cannot be used
-    <config>/private/         0700   the pairing helper's own scratch; never agent-readable
+    <setup>/connect.sh        0700   the one line a person runs; holds no key
+    <setup>/set-token.sh      0700   the fallback if pairing cannot be used
+    <setup>/private/          0700   the pairing helper's own scratch; never agent-readable
     <state>/                  0700   state.json, install-manifest.json, UNINSTALL.md  0600
     <logs>/                   0700   run-*.log 0600, pruned at 14 days
-    <skill>/homing-check/     0755   SKILL.md, JUDGE.md 0644
+    <config>/prompts/         0700   JUDGE.md 0400
+    <skill>/homing-check/     0700   optional SKILL.md 0644
 
 Rules this file enforces mechanically:
 
   * It never writes, prints, echoes, or accepts a key. A config carrying
     something key-shaped is refused before anything is created. The person
-    pairs this computer by running <config>/connect.sh themselves.
+    pairs this computer by running <setup>/connect.sh themselves. Setup helpers
+    are deleted with the verified temporary package after setup or repair.
   * The model command is a list of arguments, never a command line. Every
     argument, path, name and identifier is rendered through this platform's
     quoting routine, so a value is data and can never become syntax.
@@ -56,6 +58,7 @@ Exit codes:
 """
 
 import argparse
+import errno
 import hashlib
 import json
 import os
@@ -77,12 +80,36 @@ EXIT_PATH = 74
 EXIT_SCHEDULER = 75
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+SETUP_MARKER = ".homing-agent-kit-ephemeral.json"
+SETUP_PREFIX = "homing-agent-kit-"
+OWNER_MARKER = ".homing-install-owner.json"
 ORIGIN_PLACEHOLDER = "__" + "HOMING_ORIGIN" + "__"
+PUBLISHED_V2_SHA256 = {
+    "SKILL.md": "05093199550a260a44f739e31c6fc95de448037698e67c1a9a2a4577f571542b",
+    "VERSION": "53c234e5e8472b6ac51c1ae1cab3fe06fad053beb8ebfd8977b010655bfdd3c3",
+    "index.md": "fd8683bfc7af6b566c26802c0ec18434d0683d6bf32488ecbc2e19db6c1c3c4b",
+    "references/environments.md": "2a8280f3d478d60fca347bb90538b049cd5ed59c525931f7852c3c9e00bb4bfe",
+    "references/pairing.md": "34690bf78b7948eafa22c0f638352bb87a140769baa638a62760609889f287ff",
+    "references/probe.md": "ebe9824c73ddeef0fcab9c087437651006c205930f0585df2255506a29bb1247",
+    "references/reachability.md": "5525e6c411f9247fae02052e3305c8f445a9f3a59d1d7944a297cafa7f5e7b62",
+    "references/runtime-template.md": "dd9221a6408b5e3a6abffe3c90aeb503e45c67c8ea70d0b299ee5381f219f6e1",
+    "references/security.md": "6c4b6bfca2295f9a1c659f078fae2764bece508ebdffe8b14764c09370675166",
+    "references/sources.md": "f1a9f3b48e3b2e8b3ec300570d9d4b0f9d57e868106fb4fe0f56388768e30980",
+    "references/troubleshooting.md": "74666b11582c94f96f7e78553deec1469633c2626783cf016ec5e1bedab35c85",
+    "scripts/homing.py": "bacaf4423b0b1bef4d97584c5d2390a723d1107d06c2fc1793a7cfcc51780c5e",
+    "scripts/install.py": "1a8aae3ab20f31476e557cde593f92ae3edc6db20fc26658773c409421bee99c",
+    "scripts/probe.ps1": "b99adf648d5eec403768b41589bf5c470dfa791aff4ad9b79759b4ab7c8aa229",
+    "scripts/probe.sh": "1e1fd354a3590276475294902c82da759ad1c29dfa0919cf10de187b544463e3",
+    "scripts/selftest.py": "002a76059c0bd8915ae092ae2e6500f22b5cd3ecfaf429b862b68e9dffe97b45",
+    "scripts/sources.py": "faa6f076b3787c18fc449e596d9bf6b307e9d9ed12d972f40c5559b590fe1d2a",
+    "scripts/verify_sources.py": "54253de319310a8b2408d969b519a0c0f67112d050a5654681ed9dfe48327b68",
+}
 PROBE_NAME = ".homing-install-probe"
 
 MODE_DIR_PRIVATE = 0o700
 MODE_DIR_SKILL = 0o700
 MODE_DIR_BIN = 0o500
+MODE_DIR_PROMPT = 0o700
 MODE_FILE_READONLY = 0o400
 MODE_FILE_STATE = 0o600
 MODE_FILE_EXEC = 0o500
@@ -257,7 +284,7 @@ def now_iso():
 CONFIG_SCHEMA = {
     "schema": 1,
     "origin": "https://homing.example.com",
-    "package_version": 1,
+    "package_version": 3,
     "os": "macos | linux | windows",
     "home": "(optional) absolute home directory; defaults to this user's",
     "python": "(optional) absolute python3 the runtime should use",
@@ -277,6 +304,8 @@ CONFIG_SCHEMA = {
                                     "one entry per argument, or [] for none"],
                 "invocation": "(legacy, discouraged) the same command as one string; it is "
                               "parsed, and refused if it carries shell syntax",
+                "install_skill": "(optional) true when this environment has an interactive "
+                                 "agent; false for scheduler-only installations",
                 "skill_flavour": "(optional) portable | claude"},
     "isolation_rung": 3,
     "unattended_rung0_opt_in": ("required only when isolation_rung is 0 and something is "
@@ -331,7 +360,7 @@ def scan_for_secrets(node, trail=""):
                 raise Refuse(
                     "The plan has a value at %s that looks like an access key. "
                     "Nothing was created. Remove it and run again - the person stores "
-                    "their own key by running set-token.sh." % where)
+                    "their own key with the temporary setup package's fallback helper." % where)
             scan_for_secrets(value, where)
     elif isinstance(node, list):
         for index, value in enumerate(node):
@@ -401,8 +430,8 @@ def clean_invocation_argv(runtime):
         raise Refuse("The model command's first entry is the program to run, and it is empty.")
     # {{...}} is substituted only inside our own templates, never in a plan. A
     # copied documentation example would otherwise install a judge pointed at a
-    # literal "{{SKILL_DIR}}/JUDGE.md", silently unpinning the model's only
-    # rule set while the install report still claims it is pinned.
+    # literal "{{PROMPT_DIR}}/JUDGE.md", silently unpinning the model's
+    # pinned rule set while the install report still claims it is pinned.
     for index, part in enumerate(argv):
         if "{{" in part and "}}" in part:
             raise Refuse(
@@ -545,11 +574,53 @@ def validate_project_prompt_revisions(value, what="project_prompt_revisions"):
     return clean
 
 
+def verified_setup_workspace(value):
+    """Return one initialized setup workspace, or refuse before any write.
+
+    Connection helpers are setup resources. Keeping them here makes successful
+    finalization remove them with the downloaded prompt and installer.
+    """
+    if not value or not os.path.isabs(value):
+        raise Refuse("--setup-workspace must name the initialized temporary package.",
+                     EXIT_USAGE)
+    absolute = os.path.abspath(value)
+    real = os.path.realpath(absolute)
+    temporary = os.path.realpath(tempfile.gettempdir())
+    if (os.path.islink(absolute) or os.path.dirname(real) != temporary or
+            not os.path.basename(real).startswith(SETUP_PREFIX)):
+        raise Refuse("The setup workspace must be a direct child of %s named %s..."
+                     % (temporary, SETUP_PREFIX))
+    marker = os.path.join(real, SETUP_MARKER)
+    manifest_path = os.path.join(real, "manifest.json")
+    try:
+        if (os.path.islink(marker) or not os.path.isfile(marker) or
+                os.path.islink(manifest_path) or not os.path.isfile(manifest_path)):
+            raise OSError("marker or manifest is not a regular file")
+        with open(marker, "rb") as handle:
+            record = json.loads(handle.read().decode("utf-8"))
+    except (OSError, ValueError, UnicodeDecodeError) as exc:
+        raise Refuse("The setup workspace was not initialized and verified (%s)." % exc)
+    script_root = os.path.realpath(os.path.dirname(SCRIPT_DIR))
+    if (not isinstance(record, dict) or record.get("schema") != 1 or
+            record.get("package") != "homing-agent-kit" or
+            os.path.realpath(str(record.get("root") or "")) != real or
+            script_root != real or record.get("manifest_sha256") != sha256_file(manifest_path)):
+        raise Refuse("The setup workspace marker does not match this package.")
+    return real
+
+
 class Plan(object):
     """Everything the install will do, decided before anything is touched."""
 
-    def __init__(self, config, preserve_effective_limits=False):
+    def __init__(self, config, preserve_effective_limits=False, setup_workspace=None,
+                 install_id=None):
         self.raw = config
+        self.setup_root = verified_setup_workspace(setup_workspace)
+        self.install_id = str(install_id or uuid.uuid4())
+        try:
+            uuid.UUID(self.install_id)
+        except (ValueError, TypeError, AttributeError):
+            raise Refuse("The install ownership id is malformed.")
         # config.json records the limits that are actually enforced.  A normal
         # plan starts with the person's requested limits and applies the rung
         # adjustment below; a repair must not halve an already-adjusted value a
@@ -629,6 +700,8 @@ class Plan(object):
                     "rather than telling anyone. Keep these under ~/Library instead."
                     % (label, path))
         self.bin_dir = self.join(self.config_dir, "bin")
+        self.prompt_dir = self.join(self.config_dir, "prompts")
+        self.judge_path = self.join(self.prompt_dir, "JUDGE.md")
         self.skill_dir = self.join(self.skill_root, "homing-check")
         self.work_dir = self.join(self.state_dir, "work")
         self.park_dir = self.join(self.state_dir, "parked")
@@ -666,6 +739,12 @@ class Plan(object):
         self.store_path = str(store.get("path") or self.default_store_path())
 
         runtime = config.get("runtime") or {}
+        install_skill = runtime.get("install_skill", True)
+        if not isinstance(install_skill, bool):
+            raise Refuse("runtime.install_skill must be true or false.")
+        self.install_skill = install_skill
+        if not self.install_skill and self.extra_skill_dirs:
+            raise Refuse("extra skill directories cannot be used when install_skill is false.")
         self.runtime_kind = str(runtime.get("kind") or "none").lower()
         self.invocation_argv = clean_invocation_argv(runtime)
         # For people to read - in the plan, the report and config.json. Nothing
@@ -798,11 +877,12 @@ class Plan(object):
 
     def plan_skill_targets(self, runtime):
         """Canonical copy plus one entry per extra runtime dir, symlink or copy."""
+        if not self.install_skill:
+            return []
         flavour = str(runtime.get("skill_flavour") or "").lower()
         if not flavour and ".claude" in self.skill_dir.replace("\\", "/").split("/"):
-            # The canonical dir can itself be a Claude path. Detecting that only
-            # for the extras left the main copy model-invocable, so it could load
-            # itself mid-conversation.
+            # The canonical dir can itself be a Claude path; give that copy the
+            # same narrowed command surface as any extra Claude destination.
             flavour = "claude"
         targets = [(self.skill_dir, flavour or "portable", "write")]
         for extra in self.extra_skill_dirs:
@@ -810,8 +890,8 @@ class Plan(object):
             if os.path.normpath(target) == os.path.normpath(self.skill_dir):
                 continue
             claude = ".claude" in extra.replace("\\", "/").split("/")
-            # A Claude Code copy differs by two frontmatter keys, so it cannot be a
-            # symlink to the portable one.
+            # A Claude Code copy narrows allowed-tools to one command, so it cannot
+            # be a symlink to the portable one.
             targets.append((target, "claude" if claude else "portable",
                             "copy" if (claude or self.windows) else "link"))
         return targets
@@ -822,26 +902,32 @@ class Plan(object):
         run_name = "run.ps1" if self.windows else "run.sh"
         self.run_path = self.join(self.bin_dir, run_name)
         suffix = ".ps1" if self.windows else ".sh"
-        self.connect_path = self.join(self.config_dir, "connect" + suffix)
-        self.set_token_path = self.join(self.config_dir, "set-token" + suffix)
         # The pairing helper's own directory. Nothing here is ever named in
         # config.json, state.json or a skill file, so nothing points a model at it.
-        self.private_dir = self.join(self.config_dir, "private")
+        self.private_dir = self.join(self.setup_root, "private")
         self.device_code_path = self.join(self.private_dir, "device-code.json")
-        self.pairing_meta_path = self.join(self.state_dir, "pairing.json")
-        self.pairing_result_path = self.join(self.state_dir, "pairing-result.json")
+        self.pairing_meta_path = self.join(self.setup_root, "pairing.json")
+        self.pairing_result_path = self.join(self.setup_root, "pairing-result.json")
+        self.connect_path = self.join(self.setup_root, "connect" + suffix)
+        self.set_token_path = self.join(self.setup_root, "set-token" + suffix)
 
         self.dirs = [
             (self.config_dir, MODE_DIR_PRIVATE),
-            (self.private_dir, MODE_DIR_PRIVATE),
             (self.bin_dir, MODE_DIR_PRIVATE),      # narrowed to 0500 once written
+            (self.prompt_dir, MODE_DIR_PROMPT),
             (self.state_dir, MODE_DIR_PRIVATE),
             (self.work_dir, MODE_DIR_PRIVATE),
             (self.park_dir, MODE_DIR_PRIVATE),
             (self.logs_dir, MODE_DIR_PRIVATE),
-            (self.skill_root, MODE_DIR_SKILL),
-            (self.skill_dir, MODE_DIR_SKILL),
         ]
+        if self.install_skill:
+            self.dirs.extend([
+                (self.skill_root, MODE_DIR_SKILL),
+                (self.skill_dir, MODE_DIR_SKILL),
+            ])
+            for target, _flavour, how in self.skill_flavours:
+                if how == "copy" and os.path.normpath(target) != os.path.normpath(self.skill_dir):
+                    self.dirs.append((target, MODE_DIR_SKILL))
         # Directories other software also owns: create them if absent, never re-mode them.
         self.shared_dirs = set([self.skill_root, self.scheduler_dir]
                                + [os.path.dirname(target)
@@ -854,16 +940,20 @@ class Plan(object):
              self.installed_script("sources.py"), MODE_FILE_EXEC),
             (self.join(self.bin_dir, "cycle.py"), CYCLE_PY, MODE_FILE_EXEC),
             (self.run_path, self.render_runner(), MODE_FILE_EXEC),
+            (self.judge_path, self.render_judge(), MODE_FILE_READONLY),
             (self.join(self.config_dir, "config.json"),
              json.dumps(self.config_document(), indent=2, sort_keys=True) + "\n",
              MODE_FILE_READONLY),
             (self.join(self.config_dir, "sources.json"),
              json.dumps(self.sources, indent=2, sort_keys=True) + "\n", MODE_FILE_READONLY),
-            (self.connect_path, self.render_connect(), 0o700),
-            (self.set_token_path, self.render_set_token(), 0o700),
             (self.join(self.state_dir, "state.json"),
              json.dumps(self.initial_state(), indent=2, sort_keys=True) + "\n",
              MODE_FILE_STATE),
+        ]
+        self.ephemeral_dirs = [(self.private_dir, MODE_DIR_PRIVATE)]
+        self.ephemeral_files = [
+            (self.connect_path, self.render_connect(), 0o700),
+            (self.set_token_path, self.render_set_token(), 0o700),
         ]
         # Re-running this is a repair, not a reset: state.json holds the cursors and
         # run history the runtime accumulated, and overwriting it would silently
@@ -873,8 +963,26 @@ class Plan(object):
             if _how in ("write", "copy"):
                 self.files.append((self.join(target, "SKILL.md"),
                                    self.render_skill(flavour), MODE_FILE_SKILL))
-                self.files.append((self.join(target, "JUDGE.md"),
-                                   self.render_judge(), MODE_FILE_SKILL))
+        owned = [("config", self.config_dir), ("state", self.state_dir),
+                 ("logs", self.logs_dir)]
+        if self.install_skill:
+            owned.append(("skill", self.skill_dir))
+        for target, _flavour, how in self.skill_flavours:
+            if how == "copy":
+                owned.append(("skill-copy", target))
+        self.owned_dirs = []
+        seen_owned = set()
+        for role, path in owned:
+            normalized = os.path.normcase(os.path.normpath(path))
+            if normalized in seen_owned:
+                continue
+            seen_owned.add(normalized)
+            marker = self.join(path, OWNER_MARKER)
+            self.owned_dirs.append({"role": role, "path": path, "marker": marker})
+            self.files.append((marker, json.dumps({
+                "schema": 1, "package": "homing-agent-kit", "install_id": self.install_id,
+                "role": role, "path": path,
+            }, sort_keys=True) + "\n", MODE_FILE_STATE))
         self.links = [(target, self.skill_dir, "link")
                       for target, _f, how in self.skill_flavours if how == "link"]
         self.build_scheduler()
@@ -918,13 +1026,16 @@ class Plan(object):
             # The list is the record. `invocation` is the same thing written out for
             # a person to read, and nothing parses it back.
             "runtime": {"kind": self.runtime_kind, "invocation_argv": self.invocation_argv,
-                        "invocation": self.invocation_display},
+                        "invocation": self.invocation_display,
+                        "install_skill": self.install_skill},
             "secret_store": {"kind": self.store_kind, "service": self.store_service},
             "scheduler": {"kind": self.scheduler_kind, "identifier": self.identifier,
                           "cadence_minutes": self.cadence_minutes,
                           "at": "%02d:%02d" % (self.hour, self.minute)},
             "paths": {"config": self.config_dir, "state": self.state_dir,
-                      "logs": self.logs_dir, "skill": self.skill_dir, "bin": self.bin_dir,
+                      "logs": self.logs_dir,
+                      "skill": self.skill_dir if self.install_skill else "",
+                      "prompt": self.prompt_dir, "bin": self.bin_dir,
                       "extra_skill_dirs": self.extra_skill_dirs},
             "isolation_rung": self.isolation_rung,
             "unattended_rung0_opt_in": bool(self.rung0_opt_in and self.isolation_rung <= 0
@@ -947,7 +1058,7 @@ class Plan(object):
         if flavour == "claude":
             text = text.replace(
                 "allowed-tools: Bash\n",
-                "allowed-tools: Bash(%s *)\ndisable-model-invocation: true\n" % runner)
+                "allowed-tools: Bash(%s *)\n" % runner)
         return (text
                 .replace("{{PKG_VERSION}}", str(self.package_version))
                 .replace("{{WORKER_LABEL}}", self.worker_label)
@@ -967,27 +1078,41 @@ class Plan(object):
         if self.windows:
             model_ps = ""
             if self.invocation_argv:
-                model_ps = ("  Invoke-Bounded %d @(%s) $Judge | Redact | "
-                            "Tee-Object -Append $Log\n"
-                            % (self.limits["model_seconds"],
-                               ", ".join(ps_quote(part, "model command argument")
-                                         for part in self.invocation_argv)))
+                model_ps = (
+                    "  $SavedHomingEnvironment = @{}\n"
+                    "  foreach ($Name in @('HOMING_TOKEN_STORE', 'HOMING_TOKEN_FILE', "
+                    "'HOMING_KEYCHAIN_SERVICE', 'CREDENTIALS_DIRECTORY')) {\n"
+                    "    if (Test-Path ('Env:' + $Name)) { "
+                    "$SavedHomingEnvironment[$Name] = (Get-Item ('Env:' + $Name)).Value }\n"
+                    "    Remove-Item ('Env:' + $Name) -ErrorAction SilentlyContinue\n"
+                    "  }\n"
+                    "  try {\n"
+                    "    Invoke-Bounded %d @(%s) $Judge | Redact | Tee-Object -Append $Log\n"
+                    "  } finally {\n"
+                    "    foreach ($Name in $SavedHomingEnvironment.Keys) { "
+                    "Set-Item ('Env:' + $Name) $SavedHomingEnvironment[$Name] }\n"
+                    "  }\n"
+                    % (self.limits["model_seconds"],
+                       ", ".join(ps_quote(part, "model command argument")
+                                 for part in self.invocation_argv)))
             return (RUN_PS1_TEMPLATE
                     .replace("{{MODEL_PHASE_PS}}", model_ps)
                     .replace("{{CONFIG}}", ps_quote(self.config_dir, "config folder"))
                     .replace("{{STATE}}", ps_quote(self.state_dir, "state folder"))
                     .replace("{{LOGS}}", ps_quote(self.logs_dir, "logs folder"))
                     .replace("{{JUDGE}}", ps_quote(
-                        self.join(self.skill_dir, "JUDGE.md"), "judge prompt path"))
+                        self.judge_path, "judge prompt path"))
                     .replace("{{PYTHON}}", ps_quote(self.python, "python program"))
                     .replace("{{STORE_ENV}}", self.store_env())
                     .replace("{{MEMORY_MB}}", str(self.limits["memory_mb"]))
                     .replace("{{WALL_CLOCK}}", str(self.limits["wall_clock_seconds"])))
         model_line = ""
         if self.invocation_argv:
-            # JUDGE.md only: no key in argv or environment, no network of its own,
-            # and a wall clock outside the model's control.
-            model_line = ("  run_bounded %d %s < \"$JUDGE\" || return $?\n"
+            # JUDGE.md is the explicit task prompt; no key enters argv or the
+            # environment, and a wall clock stays outside the model's control.
+            model_line = ("  (unset HOMING_TOKEN_STORE HOMING_TOKEN_FILE "
+                          "HOMING_KEYCHAIN_SERVICE CREDENTIALS_DIRECTORY; "
+                          "run_bounded %d %s) < \"$JUDGE\" || return $?\n"
                           % (self.limits["model_seconds"],
                              posix_argv(self.invocation_argv, "model command argument")))
         return (RUN_SH_TEMPLATE
@@ -995,7 +1120,7 @@ class Plan(object):
                 .replace("{{STATE}}", posix_quote(self.state_dir, "state folder"))
                 .replace("{{LOGS}}", posix_quote(self.logs_dir, "logs folder"))
                 .replace("{{JUDGE}}", posix_quote(
-                    self.join(self.skill_dir, "JUDGE.md"), "judge prompt path"))
+                    self.judge_path, "judge prompt path"))
                 .replace("{{PYTHON}}", posix_quote(self.python, "python program"))
                 .replace("{{STORE_ENV}}", self.store_env())
                 .replace("{{MODEL_PHASE}}", model_line)
@@ -1410,14 +1535,42 @@ def _restore_file(path, backup):
             pass
 
 
-def _stage_files_transaction(entries):
+def _restore_link_target(path, backup):
+    """Restore one optional skill link/copy without deleting foreign content."""
+    if backup:
+        _restore_file(path, backup)
+        return
+    if os.path.islink(path) or os.path.isfile(path):
+        _restore_file(path, None)
+        return
+    if os.path.isdir(path):
+        for name in ("SKILL.md", ".homing-install-owner.json"):
+            candidate = os.path.join(path, name)
+            if os.path.isfile(candidate) and not os.path.islink(candidate):
+                try:
+                    os.unlink(candidate)
+                except OSError:
+                    pass
+        try:
+            os.rmdir(path)
+        except OSError:
+            pass
+
+
+def _stage_files_transaction(entries, failure_hook=None):
     """Stage replacements and return rollback records kept until the caller commits."""
     backups = []
     try:
-        for path, _text, _mode in entries:
+        for index, (path, _text, _mode) in enumerate(entries):
+            if failure_hook:
+                failure_hook("file:%d:before-backup" % index)
             backups.append((path, _backup_file(path)))
-        for path, text, mode in entries:
+        for index, (path, text, mode) in enumerate(entries):
+            if failure_hook:
+                failure_hook("file:%d:before-replace" % index)
             write_file(path, text, mode)
+            if failure_hook:
+                failure_hook("file:%d:after-replace" % index)
     except Exception:
         for path, backup in reversed(backups):
             _restore_file(path, backup)
@@ -1513,6 +1666,204 @@ def remove_path(path, removed):
         say("  could not remove %s (%s)" % (path, exc.strerror or exc))
 
 
+def _owner_marker(path):
+    marker = os.path.join(path, OWNER_MARKER)
+    if os.path.islink(marker) or not os.path.isfile(marker):
+        return None
+    try:
+        with open(marker, "rb") as handle:
+            value = json.loads(handle.read().decode("utf-8"))
+        return value if isinstance(value, dict) else None
+    except (OSError, ValueError, UnicodeDecodeError):
+        return None
+
+
+def _refuse_symlink_components(path):
+    probe = os.path.abspath(path)
+    stops = []
+    for candidate in (os.path.abspath(tempfile.gettempdir()),
+                      os.path.abspath(os.path.expanduser("~"))):
+        try:
+            if os.path.commonpath([probe, candidate]) == candidate:
+                stops.append(candidate)
+        except ValueError:
+            pass
+    stop = max(stops, key=len) if stops else os.path.abspath(os.sep)
+    while probe and os.path.dirname(probe) != probe:
+        if probe == stop:
+            return
+        if os.path.lexists(probe) and os.path.islink(probe):
+            raise Refuse("The install path crosses a symlink at %s; refusing to write through it."
+                         % probe, EXIT_PATH)
+        probe = os.path.dirname(probe)
+
+
+def _matches_published_v2(candidate, origin):
+    """Match only byte-exact v2 setup-skill layouts shipped by Homing."""
+    members = {}
+    for current, directories, files in os.walk(candidate, followlinks=False):
+        for name in directories + files:
+            path = os.path.join(current, name)
+            entry = os.lstat(path)
+            if stat.S_ISLNK(entry.st_mode):
+                return False
+            if stat.S_ISREG(entry.st_mode):
+                if getattr(entry, "st_nlink", 1) != 1:
+                    return False
+                relative = os.path.relpath(path, candidate).replace(os.sep, "/")
+                with open(path, "rb") as handle:
+                    data = handle.read(512 * 1024 + 1)
+                if len(data) > 512 * 1024:
+                    return False
+                normalized = data.replace(origin.encode("utf-8"),
+                                          ORIGIN_PLACEHOLDER.encode("utf-8"))
+                members[relative] = hashlib.sha256(normalized).hexdigest()
+            elif not stat.S_ISDIR(entry.st_mode):
+                return False
+    layouts = ({"SKILL.md"}, {"SKILL.md", "VERSION"}, set(PUBLISHED_V2_SHA256))
+    if set(members) not in layouts:
+        return False
+    return all(PUBLISHED_V2_SHA256.get(name) == digest
+               for name, digest in members.items())
+
+
+def clean_verified_legacy_setup(plan):
+    """Remove only recognizable, self-contained Homing setup-skill residue.
+
+    This is migration, not broad housekeeping. A lookalike, link, special file,
+    hard-linked file, unknown member, or inaccessible root is preserved for a
+    human decision instead of being recursively removed.
+    """
+    roots = {plan.skill_root}
+    for target, _flavour, _how in plan.skill_flavours:
+        roots.add(os.path.dirname(target))
+    roots.update({
+        os.path.join(plan.home, ".agents", "skills"),
+        os.path.join(plan.home, ".claude", "skills"),
+        os.path.join(plan.home, ".config", "claude", "skills"),
+    })
+    removed, preserved = [], []
+    allowed_names = {"SKILL.md", "VERSION", OWNER_MARKER}
+    allowed_suffixes = (".md", ".py", ".sh", ".ps1", ".json")
+    for skill_root in sorted(roots):
+        candidate = os.path.join(skill_root, "homing-setup")
+        try:
+            root_info = os.lstat(skill_root)
+        except OSError as exc:
+            if exc.errno == errno.ENOENT:
+                continue
+            preserved.append("%s (cannot inspect skill root: %s)" %
+                             (candidate, exc.strerror or exc))
+            continue
+        if stat.S_ISLNK(root_info.st_mode) or not stat.S_ISDIR(root_info.st_mode):
+            preserved.append("%s (skill root is not a regular directory)" % candidate)
+            continue
+        try:
+            names = os.listdir(skill_root)
+        except OSError as exc:
+            preserved.append("%s (cannot inspect skill root: %s)" %
+                             (candidate, exc.strerror or exc))
+            continue
+        if "homing-setup" not in names:
+            continue
+        reason = ""
+        try:
+            _refuse_symlink_components(candidate)
+            if os.path.islink(candidate) or not os.path.isdir(candidate):
+                raise ValueError("not a regular directory")
+            ownership = os.path.join(candidate, OWNER_MARKER)
+            published_v2 = not os.path.lexists(ownership) and _matches_published_v2(
+                candidate, plan.origin)
+            if not published_v2:
+                owner_info = os.lstat(ownership)
+                if (not stat.S_ISREG(owner_info.st_mode) or stat.S_ISLNK(owner_info.st_mode) or
+                        getattr(owner_info, "st_nlink", 1) != 1):
+                    raise ValueError("has no private legacy ownership marker")
+                with open(ownership, "rb") as handle:
+                    owner = json.loads(handle.read().decode("utf-8"))
+                try:
+                    uuid.UUID(str(owner.get("install_id") or ""))
+                except (ValueError, TypeError, AttributeError):
+                    raise ValueError("has no valid legacy ownership id")
+                if (owner.get("schema") != 1 or owner.get("package") != "homing-agent-kit" or
+                        owner.get("role") != "setup-skill" or owner.get("path") != candidate):
+                    raise ValueError("legacy ownership marker does not match this directory")
+            skill = os.path.join(candidate, "SKILL.md")
+            info = os.lstat(skill)
+            if (not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode) or
+                    getattr(info, "st_nlink", 1) != 1):
+                raise ValueError("SKILL.md is not one private regular file")
+            with open(skill, "rb") as handle:
+                body = handle.read(512 * 1024 + 1).decode("utf-8")
+            if (len(body.encode("utf-8")) > 512 * 1024 or
+                    not re.search(r"(?mi)^name:\s*homing-setup\s*$", body) or
+                    "homing" not in body.lower() or "setup" not in body.lower()):
+                raise ValueError("SKILL.md does not identify the Homing setup skill")
+            for current, directories, files in os.walk(candidate, followlinks=False):
+                for name in directories + files:
+                    path = os.path.join(current, name)
+                    entry = os.lstat(path)
+                    if stat.S_ISLNK(entry.st_mode):
+                        raise ValueError("contains a link")
+                    if stat.S_ISREG(entry.st_mode):
+                        if getattr(entry, "st_nlink", 1) != 1:
+                            raise ValueError("contains a hard-linked file")
+                        if name not in allowed_names and not name.lower().endswith(allowed_suffixes):
+                            raise ValueError("contains an unknown member")
+                    elif not stat.S_ISDIR(entry.st_mode):
+                        raise ValueError("contains a special file")
+            remove_path(candidate, removed)
+            if os.path.lexists(candidate):
+                raise ValueError("could not remove it completely")
+        except (OSError, UnicodeDecodeError, ValueError, Refuse) as exc:
+            reason = str(exc)
+        if reason:
+            preserved.append("%s (%s)" % (candidate, reason))
+    for path in removed:
+        say("Removed verified legacy setup residue: %s" % path)
+    for detail in preserved:
+        say("Preserved unverified setup lookalike: %s" % detail)
+    return removed, preserved
+
+
+def validate_install_ownership(plan):
+    """Refuse collisions and broad targets before creating anything."""
+    protected = set(os.path.realpath(path) for path in (
+        os.path.abspath(os.sep), plan.home, plan.setup_root, os.getcwd()))
+    repairing = getattr(plan, "repair_existing", False)
+    for entry in plan.owned_dirs:
+        path = entry["path"]
+        real = os.path.realpath(path)
+        if real in protected:
+            raise Refuse("The %s folder is a protected root, not a Homing-owned directory: %s"
+                         % (entry["role"], path), EXIT_PATH)
+        _refuse_symlink_components(path)
+        if not os.path.lexists(path):
+            if repairing:
+                raise Refuse("The owned %s folder is missing during repair: %s"
+                             % (entry["role"], path), EXIT_PATH)
+            continue
+        if os.path.islink(path) or not os.path.isdir(path):
+            raise Refuse("The %s target is not a regular directory: %s"
+                         % (entry["role"], path), EXIT_PATH)
+        owner = _owner_marker(path)
+        matches = bool(owner and owner.get("package") == "homing-agent-kit" and
+                       owner.get("install_id") == plan.install_id and
+                       owner.get("role") == entry["role"] and owner.get("path") == path)
+        if repairing and not matches:
+            raise Refuse("The %s folder has no matching Homing ownership marker: %s"
+                         % (entry["role"], path), EXIT_PATH)
+        if not repairing:
+            raise Refuse("The %s folder already exists. I will not adopt or overwrite it: %s"
+                         % (entry["role"], path), EXIT_PATH)
+    if not repairing:
+        for path in list(plan.scheduler_artifacts) + [target for target, _s, _k in plan.links]:
+            _refuse_symlink_components(path)
+            if os.path.lexists(path):
+                raise Refuse("An install target already exists and is not owned by this install: %s"
+                             % path, EXIT_PATH)
+
+
 # --- running other people's commands ----------------------------------------
 
 
@@ -1558,10 +1909,44 @@ def manifest_dir(manifest, role):
     return str(manifest.get(role + "_dir") or "")
 
 
+def manifest_authority(manifest):
+    """Digest the exact destructive capability, excluding its carrier markers."""
+    marker_paths = {str(entry.get("marker") or "") for entry in manifest.get("owned_dirs") or []
+                    if isinstance(entry, dict)}
+    files = [entry for entry in manifest.get("files") or []
+             if isinstance(entry, dict) and entry.get("path") not in marker_paths]
+    payload = {
+        "schema": manifest.get("schema"),
+        "package_version": manifest.get("package_version"),
+        "install_id": manifest.get("install_id"),
+        "origin": manifest.get("origin"),
+        "paths": manifest.get("paths"),
+        "runner": manifest.get("runner"),
+        "runtime_prompt": manifest.get("runtime_prompt"),
+        "interactive_skill": manifest.get("interactive_skill"),
+        "files": files,
+        "links": manifest.get("links"),
+        "owned_dirs": manifest.get("owned_dirs"),
+        "scheduler": manifest.get("scheduler"),
+        "secret_store": manifest.get("secret_store"),
+    }
+    return sha256_text(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+
+
 def load_manifest(path):
     try:
-        with open(path, "rb") as handle:
-            return json.loads(handle.read().decode("utf-8"))
+        absolute = os.path.abspath(path)
+        if os.path.islink(absolute):
+            raise Refuse("The install manifest is a symlink; refusing to trust it.", EXIT_USAGE)
+        with open(absolute, "rb") as handle:
+            value = json.loads(handle.read().decode("utf-8"))
+        if not isinstance(value, dict):
+            raise ValueError("manifest is not an object")
+        # Preserve provenance outside the serialized schema. Destructive operations
+        # must be anchored to the manifest inside the marked state directory; a
+        # caller-selected copy is not an ownership capability.
+        value["_loaded_from"] = absolute
+        return value
     except (OSError, ValueError, UnicodeDecodeError) as exc:
         raise Refuse("I could not read the record of what was installed at %s (%s). "
                      "Without it I will not guess what to remove." % (path, exc), EXIT_USAGE)
@@ -1660,11 +2045,23 @@ def repair_config_from_manifest(manifest_path, sources_path=None, basis_path=Non
     if not isinstance(manifest_paths, dict):
         raise Refuse("The install manifest has no paths object; I will not guess its install.")
     roles = {}
-    for role in ("config", "state", "logs", "skill"):
+    for role in ("config", "state", "logs"):
         roles[role] = _repair_absolute_path(manifest_paths.get(role), role, os_id)
         if os.path.islink(roles[role]):
             raise Refuse("The installed %s folder is a symlink; I will not repair through it."
                          % role)
+    interactive = manifest.get("interactive_skill")
+    if interactive is not None and not isinstance(interactive, dict):
+        raise Refuse("The install manifest interactive-skill record is malformed.")
+    skill_enabled = (interactive.get("enabled") is True if isinstance(interactive, dict)
+                     else bool(manifest_paths.get("skill")))
+    roles["skill"] = ""
+    if skill_enabled:
+        roles["skill"] = _repair_absolute_path(manifest_paths.get("skill"), "skill", os_id)
+        if os.path.islink(roles["skill"]):
+            raise Refuse("The installed skill folder is a symlink; I will not repair through it.")
+    elif manifest_paths.get("skill") not in (None, ""):
+        raise Refuse("The install manifest disables its skill but still names a skill path.")
     config_dir, state_dir = roles["config"], roles["state"]
     config_path = os.path.join(config_dir, "config.json")
     installed_config = _read_json_object(config_path, "installed config", True)
@@ -1685,10 +2082,25 @@ def repair_config_from_manifest(manifest_path, sources_path=None, basis_path=Non
     if not isinstance(config_paths, dict):
         raise Refuse("The installed config has no paths object; I will not guess its install.")
     expected_bin = os.path.join(config_dir, "bin") if os_id != "windows" else config_dir.rstrip("\\/") + "\\bin"
-    for role in ("config", "state", "logs", "skill"):
+    for role in ("config", "state", "logs"):
         value = _repair_absolute_path(config_paths.get(role), "config " + role, os_id)
         if os.path.normcase(value.rstrip("\\/")) != os.path.normcase(roles[role].rstrip("\\/")):
             raise Refuse("The manifest and installed config %s paths disagree." % role)
+    config_skill = str(config_paths.get("skill") or "")
+    if skill_enabled:
+        value = _repair_absolute_path(config_skill, "config skill", os_id)
+        if os.path.normcase(value.rstrip("\\/")) != os.path.normcase(roles["skill"].rstrip("\\/")):
+            raise Refuse("The manifest and installed config skill paths disagree.")
+    elif config_skill:
+        raise Refuse("The installed config disables its skill but still names a skill path.")
+    expected_prompt = (config_dir.rstrip("\\/") +
+                       ("\\prompts" if os_id == "windows" else "/prompts"))
+    config_prompt = str(config_paths.get("prompt") or "")
+    if config_prompt:
+        config_prompt = _repair_absolute_path(config_prompt, "config prompt", os_id)
+        if os.path.normcase(config_prompt.rstrip("\\/")) != \
+                os.path.normcase(expected_prompt.rstrip("\\/")):
+            raise Refuse("The installed runtime prompt path is inconsistent with its config path.")
     config_bin = _repair_absolute_path(config_paths.get("bin"), "config bin", os_id)
     if os.path.normcase(config_bin.rstrip("\\/")) != os.path.normcase(expected_bin.rstrip("\\/")):
         raise Refuse("The installed config bin path is inconsistent with its config path.")
@@ -1762,6 +2174,8 @@ def repair_config_from_manifest(manifest_path, sources_path=None, basis_path=Non
     links = manifest.get("links") or []
     if not isinstance(links, list):
         raise Refuse("The install manifest links are malformed; refusing repair.")
+    if links and not skill_enabled:
+        raise Refuse("The install manifest disables its skill but still records skill links.")
     extra_skill_dirs = []
     for entry in links:
         if not isinstance(entry, dict) or entry.get("kind") not in ("symlink", "copy"):
@@ -1800,6 +2214,9 @@ def repair_config_from_manifest(manifest_path, sources_path=None, basis_path=Non
         raise Refuse("The installed config has an incomplete worker decision.")
     if "invocation_argv" not in runtime:
         raise Refuse("The installed config has no invocation list; refusing to guess a runtime.")
+    runtime_skill = runtime.get("install_skill", skill_enabled)
+    if not isinstance(runtime_skill, bool) or runtime_skill != skill_enabled:
+        raise Refuse("The manifest and runtime disagree about the interactive skill.")
     isolation = installed_config.get("isolation_rung")
     if isinstance(isolation, bool) or not isinstance(isolation, int) or isolation < 0:
         raise Refuse("The installed config has an unusable isolation rung.")
@@ -1831,7 +2248,7 @@ def repair_config_from_manifest(manifest_path, sources_path=None, basis_path=Non
         # homing-check directory. Derive the former so repair does not nest a
         # second homing-check directory.
         "paths": {"config": config_dir, "state": state_dir, "logs": roles["logs"],
-                  "skill": _path_parent(roles["skill"], os_id),
+                  "skill": _path_parent(roles["skill"], os_id) if skill_enabled else "",
                   "extra_skill_dirs": sorted(set(extra_skill_dirs)),
                   "scheduler": scheduler_dir},
         "scheduler": {"kind": scheduler_kind, "identifier": identifier,
@@ -1847,10 +2264,17 @@ def repair_config_from_manifest(manifest_path, sources_path=None, basis_path=Non
     return repair
 
 
-def repair_plan(manifest_path, sources_path=None, basis_path=None):
+def repair_plan(manifest_path, sources_path=None, basis_path=None, setup_workspace=None):
     """Build a current-package plan without inventing any installed decision."""
+    existing = load_manifest(manifest_path)
+    validate_destructive_manifest(existing)
+    install_id = existing.get("install_id")
+    if not install_id:
+        raise Refuse("This install predates exact ownership markers. Use the documented legacy "
+                     "migration before repair.")
     plan = Plan(repair_config_from_manifest(manifest_path, sources_path, basis_path),
-                preserve_effective_limits=True)
+                preserve_effective_limits=True, setup_workspace=setup_workspace,
+                install_id=install_id)
     plan.repair_existing = True
     return plan
 
@@ -1874,12 +2298,13 @@ def render_uninstall(plan, manifest):
               "this computer cannot cancel its own access, and removing the files below does "
               "not cancel it either. After that, every request from here is refused, and the "
               "next run stops with \"Homing needs you to reconnect\"." % plan.origin, "",
-              "To connect it again afterwards, run:", "",
-              "```sh", "sh %s" % shell_quote(plan.connect_path), "```", ""]
+              "To connect it again afterwards, get a fresh setup prompt from "
+              "%s/agent-setup/." % plan.origin, ""]
     lines += ["## 3. Remove it completely", "",
-              "`install.py --manifest %s --uninstall` does all of this and closes any run "
-              "this computer still has open in Homing. By hand:"
-              % manifest_path_for(plan.state_dir), "", "```sh"]
+              "For assisted removal, get a fresh setup prompt from %s/agent-setup/. It fetches "
+              "a current temporary package, reads %s, removes the worker, and cleans itself up. "
+              "By hand:"
+              % (plan.origin, manifest_path_for(plan.state_dir)), "", "```sh"]
     for _label, argv in plan.unregister_commands:
         lines.append(shell_join(argv))
     lines.append("rm -rf %s" % shell_quote(os.path.join(plan.state_dir, "run.lock")))
@@ -1890,7 +2315,8 @@ def render_uninstall(plan, manifest):
     lines.append(shell_join(plan.secret_removal_command()))
     for entry in manifest.get("links", []):
         lines.append("rm -rf %s" % shell_quote(entry["path"]))
-    lines.append("rm -rf %s" % shell_quote(plan.skill_dir))
+    if plan.install_skill:
+        lines.append("rm -rf %s" % shell_quote(plan.skill_dir))
     lines.append("rm -rf %s" % shell_quote(plan.config_dir))
     lines.append("rm -rf %s" % shell_quote(plan.state_dir))
     lines += ["```", "", logs_note(plan), "",
@@ -1919,9 +2345,8 @@ def render_uninstall_windows(plan, manifest):
              "## Cut off its access (do this first if the PC is lost)", "",
              "Open %s/agent-setup/ and disconnect this worker's key. Only you can do that; "
              "this PC cannot cancel its own access, and removing the files below does not "
-             "cancel it either. To connect it again afterwards, run "
-             "`powershell -NoProfile -ExecutionPolicy Bypass -File \"%s\"`."
-             % (plan.origin, plan.connect_path), ""]
+             "cancel it either. To connect it again afterwards, get a fresh setup prompt "
+             "from %s/agent-setup/." % (plan.origin, plan.origin), ""]
     if plan.pause_commands:
         name = ps_quote(plan.identifier, "task name")
         lines += ["## Pause it (keeps everything, stops it running)", "", "```powershell",
@@ -1938,7 +2363,9 @@ def render_uninstall_windows(plan, manifest):
     lines.append(gone(plan.store_path))
     for entry in manifest.get("links", []):
         lines.append(gone(entry["path"]))
-    lines += [gone(plan.skill_dir), gone(plan.config_dir), gone(plan.state_dir), "```", "",
+    if plan.install_skill:
+        lines.append(gone(plan.skill_dir))
+    lines += [gone(plan.config_dir), gone(plan.state_dir), "```", "",
               logs_note(plan), "",
               "Last, open %s/agent-setup/ and disconnect the key. Only you can do that - "
               "this PC cannot revoke its own access." % plan.origin, ""]
@@ -2004,6 +2431,9 @@ def show_plan(plan):
         say("  %-6s %-7d %s%s" % (oct(mode)[2:], len(text.encode("utf-8")), path, kept))
     for target, source, _kind in plan.links:
         say("  link         %s -> %s" % (target, source))
+    say("Ephemeral setup helpers (removed with the verified package):")
+    for path, text, mode in plan.ephemeral_files:
+        say("  %-6s %-7d %s" % (oct(mode)[2:], len(text.encode("utf-8")), path))
     if getattr(plan, "repair_existing", False):
         say("Scheduler state:")
         say("  left unchanged (repair does not register, enable, restart, or run the job)")
@@ -2030,17 +2460,27 @@ def writability_note(path):
     return "   (NOT WRITABLE - install will stop here)"
 
 
-def apply_plan(plan):
+def apply_plan(plan, failure_hook=None):
+    validate_install_ownership(plan)
     os.umask(0o077)
     manifest = {
         "schema": 1, "installed_at": now_iso(), "package_version": plan.package_version,
+        "install_id": plan.install_id,
         "origin": plan.origin, "os": plan.os, "worker": plan.worker_label,
         # The four directory roles a reader needs. `bin` is deliberately not one of
         # them: it is <config>/bin, and it is listed under "dirs" with its real 0500.
         "paths": {"config": plan.config_dir, "state": plan.state_dir, "logs": plan.logs_dir,
-                  "skill": plan.skill_dir},
+                  "prompt": plan.prompt_dir,
+                  "skill": plan.skill_dir if plan.install_skill else ""},
         "runner": plan.run_path,
-        "dirs": [], "files": [], "links": [],
+        "runtime_prompt": plan.judge_path,
+        "interactive_skill": {
+            "enabled": plan.install_skill,
+            "dir": plan.skill_dir if plan.install_skill else "",
+            "copies": [target for target, _flavour, how in plan.skill_flavours
+                       if how in ("copy", "link")],
+        },
+        "dirs": [], "files": [], "links": [], "owned_dirs": plan.owned_dirs,
         "scheduler": {"kind": plan.scheduler_kind, "identifier": plan.identifier,
                       "directory": plan.scheduler_dir,
                       "path": (plan.scheduler_artifacts or [""])[0],
@@ -2062,7 +2502,8 @@ def apply_plan(plan):
     # replacement (including scheduler registration).  Do not snapshot or
     # recursively remove arbitrary user directories.
     mode_before = {}
-    for path, _mode in list(plan.dirs) + [(plan.bin_dir, MODE_DIR_PRIVATE)]:
+    for path, _mode in list(plan.dirs) + list(plan.ephemeral_dirs) + [
+            (plan.bin_dir, MODE_DIR_PRIVATE)]:
         if os.path.isdir(path) and not os.path.islink(path):
             try:
                 mode_before[path] = stat.S_IMODE(os.stat(path).st_mode)
@@ -2070,24 +2511,50 @@ def apply_plan(plan):
                 pass
     link_backups = []
     for target, _source, _kind in plan.links:
-        if os.path.islink(target) or os.path.isfile(target):
-            link_backups.append((target, _backup_file(target)))
+        link_backups.append((target, _backup_file(target)))
     file_backups = None
     scheduler_touched = False
+    created_dirs = []
     try:
-        for path, mode in plan.dirs:
+        for index, (path, mode) in enumerate(plan.ephemeral_dirs):
+            if failure_hook:
+                failure_hook("ephemeral-directory:%d:before" % index)
+            existed = os.path.isdir(path)
+            ensure_dir(path, mode, "temporary setup helpers")
+            if not existed:
+                created_dirs.append(path)
+            if failure_hook:
+                failure_hook("ephemeral-directory:%d:after" % index)
+        for index, (path, mode) in enumerate(plan.dirs):
             if path == plan.bin_dir:
                 continue        # recorded once below, at the mode it is locked down to
+            if failure_hook:
+                failure_hook("directory:%d:before" % index)
             existed = os.path.isdir(path)
             if path == plan.work_dir:
                 # Scratch: run.sh recreates it each cycle and its EXIT trap removes
                 # it. Recording it as a required path made selftest fail on every
                 # install that had actually run once.
                 ensure_dir(path, mode, "Homing files")
+                if not existed:
+                    created_dirs.append(path)
+                if failure_hook:
+                    failure_hook("directory:%d:after" % index)
                 continue
             actual = ensure_dir(path, mode, "Homing files", adopt_existing=path in plan.shared_dirs)
+            if not existed:
+                created_dirs.append(path)
             manifest["dirs"].append({"path": path, "mode": oct(actual), "created": not existed})
+            if failure_hook:
+                failure_hook("directory:%d:after" % index)
+        bin_existed = os.path.isdir(plan.bin_dir)
+        if failure_hook:
+            failure_hook("bin-directory:before")
         ensure_dir(plan.bin_dir, MODE_DIR_PRIVATE, "installed scripts")
+        if not bin_existed:
+            created_dirs.append(plan.bin_dir)
+        if failure_hook:
+            failure_hook("bin-directory:after")
 
         file_entries = []
         for path, text, mode in plan.files:
@@ -2100,13 +2567,40 @@ def apply_plan(plan):
             manifest["files"].append({"path": path, "mode": oct(mode),
                                       "sha256": digest})
 
-        for target, source, _kind in plan.links:
+        # These helpers exist only while the verified setup workspace exists.
+        # They are intentionally absent from the durable install manifest.
+        file_entries.extend(plan.ephemeral_files)
+
+        for index, (target, source, _kind) in enumerate(plan.links):
+            if failure_hook:
+                failure_hook("link:%d:before" % index)
             link_or_copy(target, source, manifest["links"])
+            if failure_hook:
+                failure_hook("link:%d:after" % index)
         for target, _flavour, how in plan.skill_flavours:
             if how == "copy":   # a second real copy, not a link: uninstall has to know
                 manifest["links"].append({"path": target, "target": plan.skill_dir, "kind": "copy"})
 
         manifest["dirs"].append({"path": plan.bin_dir, "mode": oct(MODE_DIR_BIN), "kind": "dir"})
+
+        # Bind the canonical manifest's exact destructive file/link set into every
+        # independently located owner marker. Marker records are excluded from the
+        # authority payload to avoid a circular digest; their paths and identities
+        # remain covered by owned_dirs.
+        authority = manifest_authority(manifest)
+        marker_paths = {entry["marker"] for entry in plan.owned_dirs}
+        bound_entries = []
+        for path, text, mode in file_entries:
+            if path in marker_paths:
+                marker = json.loads(text)
+                marker["manifest_authority"] = authority
+                text = json.dumps(marker, sort_keys=True) + "\n"
+                for record in manifest["files"]:
+                    if record.get("path") == path:
+                        record["sha256"] = sha256_text(text)
+                        break
+            bound_entries.append((path, text, mode))
+        file_entries = bound_entries
 
         # The manifest and uninstall instructions are part of the same replacement
         # transaction as the installed scripts/config. A failed repair therefore
@@ -2118,12 +2612,16 @@ def apply_plan(plan):
             (os.path.join(plan.state_dir, "UNINSTALL.md"),
              render_uninstall(plan, manifest), MODE_FILE_STATE),
         ])
-        file_backups = _stage_files_transaction(file_entries)
+        file_backups = _stage_files_transaction(file_entries, failure_hook=failure_hook)
         # bin/ is narrowed only once everything inside it exists. Keep this after
         # the replacement transaction: staged files need a writable directory, and
         # a failed repair should leave the old package reachable for rollback.
         try:
+            if failure_hook:
+                failure_hook("bin-mode:before")
             os.chmod(plan.bin_dir, MODE_DIR_BIN)
+            if failure_hook:
+                failure_hook("bin-mode:after")
         except OSError as exc:
             raise Refuse("I could not lock down %s (%s)." % (plan.bin_dir, exc.strerror or exc),
                          EXIT_PATH)
@@ -2131,25 +2629,54 @@ def apply_plan(plan):
         # the scheduler. Runner paths and cadence do not change, so an active job
         # keeps using the replaced files while an inactive job stays inactive.
         if not getattr(plan, "repair_existing", False):
-            for label, argv in plan.register_commands:
+            for index, (label, argv) in enumerate(plan.register_commands):
+                if failure_hook:
+                    failure_hook("scheduler:%d:before" % index)
                 scheduler_touched = True
                 run_command(label, argv, required=label not in ("stop any previous copy",
                                                                 "keep it running when signed out",
                                                                 "forget the failure state"))
+                if failure_hook:
+                    failure_hook("scheduler:%d:after" % index)
+        # Same-directory backups inside bin/ cannot be unlinked while its final
+        # mode is 0500. Reopen only that owned directory for the commit, remove
+        # every rollback file, then immediately restore the verified final mode.
+        os.chmod(plan.bin_dir, MODE_DIR_PRIVATE)
         _commit_files_transaction(file_backups)
+        os.chmod(plan.bin_dir, MODE_DIR_BIN)
         file_backups = None
         for target, backup in link_backups:
             _remove_rollback_backup(backup)
         link_backups = []
         return manifest
     except Exception:
+        # File replacement needs write permission on bin/. Once the commit path
+        # narrows it to 0500, a later scheduler failure cannot unlink or restore
+        # its entries until rollback temporarily reopens the directory.
+        try:
+            if os.path.isdir(plan.bin_dir) and not os.path.islink(plan.bin_dir):
+                os.chmod(plan.bin_dir, MODE_DIR_PRIVATE)
+        except OSError:
+            pass
         if file_backups is not None:
             _rollback_files_transaction(file_backups)
         for target, backup in reversed(link_backups):
-            _restore_file(target, backup)
+            _restore_link_target(target, backup)
+        if scheduler_touched and not getattr(plan, "repair_existing", False):
+            for _label, argv in plan.unregister_commands:
+                run_command("roll back the new schedule", argv, required=False)
+            for _label, argv in plan.post_remove_commands:
+                run_command("reload after schedule rollback", argv, required=False)
         for path, mode in mode_before.items():
             try:
                 os.chmod(path, mode)
+            except OSError:
+                pass
+        for path in reversed(created_dirs):
+            try:
+                if os.path.isdir(path) and not os.path.islink(path):
+                    os.chmod(path, MODE_DIR_PRIVATE)
+                    os.rmdir(path)
             except OSError:
                 pass
         if scheduler_touched and getattr(plan, "repair_existing", False):
@@ -2220,12 +2747,11 @@ def report_install(plan):
         say("Scheduled for %02d:%02d." % (plan.hour, plan.minute))
     say("")
     say("Stopping it, in the order a person is most likely to want:")
-    say("  pause here      %s --manifest %s --pause"
-        % (os.path.basename(__file__), shell_quote(manifest_path_for(plan.state_dir))))
     say("  pause in Homing %s/agent-setup/  - works even when this computer is off"
         % plan.origin)
-    say("  remove it       %s --manifest %s --uninstall"
-        % (os.path.basename(__file__), shell_quote(manifest_path_for(plan.state_dir))))
+    say("  pause locally   follow %s" % os.path.join(plan.state_dir, "UNINSTALL.md"))
+    say("  remove it       get a fresh setup prompt from %s/agent-setup/"
+        % plan.origin)
     say("  revoke the key  %s/agent-setup/  - only the person can do this, and it is the"
         % plan.origin)
     say("                  one that holds even if this computer is out of their hands")
@@ -2245,6 +2771,7 @@ def report_repair(plan):
 
 
 def do_pause(manifest, resume=False):
+    validate_destructive_manifest(manifest)
     scheduler = manifest.get("scheduler") or {}
     commands = scheduler.get("resume" if resume else "pause") or []
     if not commands:
@@ -2260,50 +2787,212 @@ def do_pause(manifest, resume=False):
     return EXIT_OK
 
 
+def validate_destructive_manifest(manifest):
+    """Validate exact ownership before pause/uninstall can mutate anything."""
+    if int(manifest.get("schema") or 0) != 1:
+        raise Refuse("The install manifest is not schema 1; refusing removal.", EXIT_USAGE)
+    install_id = str(manifest.get("install_id") or "")
+    try:
+        uuid.UUID(install_id)
+    except (ValueError, TypeError, AttributeError):
+        raise Refuse("The install manifest has no valid ownership id; refusing removal.",
+                     EXIT_USAGE)
+    owned = manifest.get("owned_dirs")
+    if not isinstance(owned, list) or not owned:
+        raise Refuse("The install manifest has no exact ownership records; refusing removal.",
+                     EXIT_USAGE)
+    validated = []
+    seen = set()
+    authority = manifest_authority(manifest)
+    for entry in owned:
+        if not isinstance(entry, dict):
+            raise Refuse("An ownership record is malformed; refusing removal.", EXIT_USAGE)
+        role, path, marker = (str(entry.get(name) or "")
+                              for name in ("role", "path", "marker"))
+        if not role or not os.path.isabs(path) or marker != os.path.join(path, OWNER_MARKER):
+            raise Refuse("An ownership record has an unsafe path; refusing removal.", EXIT_USAGE)
+        normalized = os.path.normcase(os.path.realpath(path))
+        if normalized in seen or normalized in (os.path.normcase(os.path.realpath(os.sep)),
+                                                 os.path.normcase(os.path.realpath(
+                                                     os.path.expanduser("~")))):
+            raise Refuse("An ownership record names a broad or repeated path; refusing removal.",
+                         EXIT_USAGE)
+        seen.add(normalized)
+        _refuse_symlink_components(path)
+        if os.path.islink(path) or not os.path.isdir(path):
+            raise Refuse("An owned directory is missing or replaced: %s" % path, EXIT_PATH)
+        owner = _owner_marker(path)
+        if (not owner or owner.get("package") != "homing-agent-kit" or
+                owner.get("install_id") != install_id or owner.get("role") != role or
+                owner.get("path") != path or owner.get("manifest_authority") != authority):
+            raise Refuse("The ownership marker does not match the manifest: %s" % path,
+                         EXIT_PATH)
+        validated.append({"role": role, "path": path, "marker": marker})
+
+    roots = [entry["path"] for entry in validated]
+    state_entries = [entry for entry in validated if entry["role"] == "state"]
+    loaded_from = str(manifest.get("_loaded_from") or "")
+    if len(state_entries) != 1 or not loaded_from:
+        raise Refuse("The install manifest is not bound to one owned state directory; "
+                     "refusing removal.", EXIT_USAGE)
+    canonical_manifest = manifest_path_for(state_entries[0]["path"])
+    if (os.path.abspath(loaded_from) != os.path.abspath(canonical_manifest) or
+            os.path.realpath(loaded_from) != os.path.realpath(canonical_manifest)):
+        raise Refuse("Use the install manifest inside its marked Homing state directory; "
+                     "refusing a copied or substituted manifest.", EXIT_USAGE)
+    try:
+        manifest_info = os.lstat(canonical_manifest)
+    except OSError:
+        raise Refuse("The canonical install manifest is missing; refusing removal.", EXIT_PATH)
+    if (not stat.S_ISREG(manifest_info.st_mode) or stat.S_ISLNK(manifest_info.st_mode) or
+            getattr(manifest_info, "st_nlink", 1) != 1):
+        raise Refuse("The canonical install manifest was replaced; refusing removal.", EXIT_PATH)
+    files = manifest.get("files")
+    if not isinstance(files, list):
+        raise Refuse("The install manifest file list is malformed; refusing removal.", EXIT_USAGE)
+    for entry in files:
+        path = str((entry or {}).get("path") or "") if isinstance(entry, dict) else ""
+        if not os.path.isabs(path):
+            raise Refuse("The install manifest contains an unsafe file path.", EXIT_USAGE)
+        if not any(os.path.commonpath([os.path.abspath(path), os.path.abspath(root)]) ==
+                   os.path.abspath(root) for root in roots):
+            artifacts = ((manifest.get("scheduler") or {}).get("artifacts") or [])
+            if path not in artifacts:
+                raise Refuse("An installed file is outside every owned directory: %s" % path,
+                             EXIT_USAGE)
+    return validated
+
+
+def unlink_owned_file(path, removed, problems):
+    try:
+        info = os.lstat(path)
+    except OSError:
+        return
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+        problems.append("owned file was replaced with another type: %s" % path)
+        return
+    if getattr(info, "st_nlink", 1) > 1:
+        problems.append("owned file has another hard link: %s" % path)
+        return
+    try:
+        os.chmod(path, MODE_FILE_STATE)
+        os.unlink(path)
+        removed.append(path)
+    except OSError as exc:
+        problems.append("could not remove %s (%s)" % (path, exc.strerror or exc))
+
+
+def unlink_owned_link(path, removed, problems):
+    if not os.path.lexists(path):
+        return
+    if not os.path.islink(path):
+        problems.append("owned link was replaced with another type: %s" % path)
+        return
+    try:
+        os.unlink(path)
+        removed.append(path)
+    except OSError as exc:
+        problems.append("could not remove %s (%s)" % (path, exc.strerror or exc))
+
+
 def do_uninstall(manifest, keep_logs=True):
+    owned_dirs = validate_destructive_manifest(manifest)
     say("Removing the Homing search.")
     scheduler = manifest.get("scheduler") or {}
     for argv in scheduler.get("unregister") or []:
         run_command("stop the schedule", argv, required=False)
 
-    removed = []
+    removed, problems = [], []
     state_dir = manifest_dir(manifest, "state")
     if state_dir:
-        remove_path(os.path.join(state_dir, "run.lock"), removed)
+        run_lock = os.path.join(state_dir, "run.lock")
+        if os.path.isdir(run_lock) and not os.path.islink(run_lock):
+            shutil.rmtree(run_lock, ignore_errors=True)
+            removed.append(run_lock)
         release_lease(manifest)
 
     for artifact in scheduler.get("artifacts") or []:
-        remove_path(artifact, removed)
+        unlink_owned_file(artifact, removed, problems)
     for entry in manifest.get("links") or []:
-        remove_path(entry.get("path", ""), removed)
-    remove_path(manifest_dir(manifest, "skill"), removed)
+        if isinstance(entry, dict) and entry.get("kind") == "symlink":
+            unlink_owned_link(str(entry.get("path") or ""), removed, problems)
     for argv in scheduler.get("post_remove") or []:
         run_command("tell the system the job is gone", argv, required=False)
     run_command("forget the stored key", manifest.get("secret_store", {}).get("remove") or [],
                 required=False)
-    remove_path(manifest_dir(manifest, "config"), removed)
     logs_dir = manifest_dir(manifest, "logs")
     logs_inside_state = bool(logs_dir and state_dir
                              and os.path.normpath(logs_dir).startswith(
                                  os.path.normpath(state_dir) + os.sep))
-    if keep_logs and logs_inside_state:
-        # Take the state directory apart around the logs rather than lying about
-        # keeping them.
-        for name in sorted(os.listdir(state_dir) if os.path.isdir(state_dir) else []):
-            child = os.path.join(state_dir, name)
-            if os.path.normpath(child) == os.path.normpath(logs_dir):
-                continue
-            remove_path(child, removed)
-    else:
-        remove_path(state_dir, removed)
-    if not keep_logs:
-        remove_path(logs_dir, removed)
+    marker_paths = {entry["marker"] for entry in owned_dirs}
+    bin_dir = os.path.join(manifest_dir(manifest, "config"), "bin")
+    if os.path.isdir(bin_dir) and not os.path.islink(bin_dir):
+        try:
+            os.chmod(bin_dir, MODE_DIR_PRIVATE)
+        except OSError as exc:
+            problems.append("could not unlock the owned bin directory (%s)" % exc)
+    exact_files = []
+    for entry in manifest.get("files") or []:
+        if isinstance(entry, dict) and isinstance(entry.get("path"), str):
+            exact_files.append(entry["path"])
+    exact_files += [manifest_path_for(state_dir), os.path.join(state_dir, "UNINSTALL.md")]
+    for path in sorted(set(exact_files), key=len, reverse=True):
+        if path in marker_paths:
+            continue
+        if keep_logs and logs_dir and (path == logs_dir or path.startswith(logs_dir + os.sep)):
+            continue
+        unlink_owned_file(path, removed, problems)
+
+    for name in ("last-run.json", "sources-state.json", ".rc"):
+        unlink_owned_file(os.path.join(state_dir, name), removed, problems)
+    if os.path.isdir(bin_dir) and not os.path.islink(bin_dir):
+        for name in os.listdir(bin_dir):
+            if name.startswith((".homing-backup-", ".homing-write-")):
+                unlink_owned_file(os.path.join(bin_dir, name), removed, problems)
+
+    # Runtime-created scratch has a closed location. Logs have closed names.
+    for name in ("work", "parked", "pending-complete", "cursors", "run.lock"):
+        path = os.path.join(state_dir, name)
+        if os.path.isdir(path) and not os.path.islink(path):
+            shutil.rmtree(path, ignore_errors=True)
+            if not os.path.exists(path):
+                removed.append(path)
+    if not keep_logs and os.path.isdir(logs_dir) and not os.path.islink(logs_dir):
+        for name in os.listdir(logs_dir):
+            if (name.startswith("run-") and name.endswith(".log")) or name in (
+                    "launchd.out.log", "launchd.err.log"):
+                unlink_owned_file(os.path.join(logs_dir, name), removed, problems)
+
+    for path in (bin_dir, os.path.join(manifest_dir(manifest, "config"), "prompts")):
+        try:
+            os.chmod(path, MODE_DIR_PRIVATE)
+            os.rmdir(path)
+            removed.append(path)
+        except OSError:
+            pass
+
+    for entry in sorted(owned_dirs, key=lambda item: len(item["path"]), reverse=True):
+        if keep_logs and (entry["path"] == logs_dir or
+                          (logs_inside_state and entry["path"] == state_dir)):
+            continue
+        unlink_owned_file(entry["marker"], removed, problems)
+        try:
+            os.chmod(entry["path"], MODE_DIR_PRIVATE)
+            os.rmdir(entry["path"])
+            removed.append(entry["path"])
+        except OSError:
+            # Foreign siblings are preserved. They are not owned residue.
+            pass
 
     say("Removed %d things." % len(removed))
     for path in removed:
         say("  %s" % path)
     if keep_logs and logs_dir and os.path.isdir(logs_dir):
         say("Kept the logs in %s." % logs_dir)
+    if problems:
+        for problem in problems:
+            say("  %s" % problem)
+        return EXIT_PATH
     origin = manifest.get("origin") or ""
     if origin:
         say("")
@@ -2400,10 +3089,6 @@ Run exactly this:
 {{RUNNER}}
 ```
 
-Always run scripts with `--help` first. DO NOT read the source until you try running the script
-first and find that a customized solution is absolutely necessary. These scripts exist to be
-called directly as black-box scripts rather than ingested into your context window.
-
 ## Exit codes
 
 | # | Cause | Do this |
@@ -2484,7 +3169,7 @@ RUN_SH_TEMPLATE = """#!/bin/sh
 #
 # Every value below arrived already quoted from install.py. Do not add quotes
 # around one, and do not hand-edit a value in: the file is generated, and the
-# installer is the only thing that knows how to quote for this shell.
+# setup builder is the only thing that knows how to quote for this shell.
 set -eu
 umask 077
 ulimit -c 0 2>/dev/null || true
@@ -3790,7 +4475,7 @@ if __name__ == "__main__":
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="install.py",
-        description="Build the Homing runtime from the decisions the installer already made.",
+        description="Build the Homing runtime from the decisions the setup agent already made.",
         epilog=("The plan is one JSON object on stdin or --config. Run "
                 "--print-config-schema to see its shape, and --dry-run to see exactly what "
                 "would be created before anything is. This script never accepts, writes, or "
@@ -3801,6 +4486,8 @@ def build_parser():
                         help="the plan, as JSON; - or omitted reads stdin")
     parser.add_argument("--manifest", metavar="PATH", default=None,
                         help="install-manifest.json, for --pause/--resume/--uninstall")
+    parser.add_argument("--setup-workspace", metavar="PATH", default=None,
+                        help="initialized homing-agent-kit-* temp package; holds one-time helpers")
     parser.add_argument("--repair", action="store_true",
                         help="repair the existing install from --manifest; preserve its decisions")
     parser.add_argument("--sources", metavar="PATH", default=None,
@@ -3827,8 +4514,9 @@ def resolve_manifest(args):
         config = load_config(args.config)
         state = (config.get("paths") or {}).get("state")
         if not state:
-            plan = Plan(config)
-            state = plan.state_dir
+            os_id = str(config.get("os") or detect_os()).lower()
+            home = str(config.get("home") or os.path.expanduser("~"))
+            state = default_paths(os_id, home)["state"]
         return load_manifest(manifest_path_for(state))
     for candidate in (default_paths(detect_os(), os.path.expanduser("~"))["state"],):
         path = manifest_path_for(candidate)
@@ -3842,10 +4530,10 @@ def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
     chosen = [name for name in ("uninstall", "pause", "resume") if getattr(args, name)]
-    if (len(chosen) > 1 or (chosen and args.repair) or
+    if (len(chosen) > 1 or (chosen and args.repair) or (chosen and args.setup_workspace) or
             ((args.sources or args.basis) and not args.repair) or
             (args.sources and args.basis)):
-        say("Choose one installer action; --sources and --basis are alternatives valid only "
+        say("Choose one setup action; --sources and --basis are alternatives valid only "
             "with --repair.")
         return EXIT_USAGE
     try:
@@ -3865,17 +4553,23 @@ def main(argv=None):
             if args.config:
                 say("--repair takes its decisions from --manifest, not --config.")
                 return EXIT_USAGE
-            plan = repair_plan(args.manifest, args.sources, args.basis)
+            plan = repair_plan(args.manifest, args.sources, args.basis,
+                               args.setup_workspace)
         else:
             if not args.config:
                 # Keep argparse's historical stdin behavior explicit in the help,
                 # while still allowing an omitted --config for a normal install.
-                plan = Plan(load_config(args.config))
+                plan = Plan(load_config(args.config), setup_workspace=args.setup_workspace)
             else:
-                plan = Plan(load_config(args.config))
+                plan = Plan(load_config(args.config), setup_workspace=args.setup_workspace)
         if args.dry_run:
             show_plan(plan)
             return EXIT_OK
+        _removed, unresolved = clean_verified_legacy_setup(plan)
+        if unresolved:
+            raise Refuse("Legacy setup guidance could not be verified and removed; refusing to "
+                         "claim a completed install until a person resolves the reported path.",
+                         EXIT_PATH)
         apply_plan(plan)
         report_repair(plan) if args.repair else report_install(plan)
         return EXIT_OK

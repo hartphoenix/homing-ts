@@ -216,7 +216,7 @@ Anything absent gets the slug rule. Never invent a prettier name.
 At the top level, add `project_prompt_revisions`: an object mapping every active project UUID read
 fresh in Phase 3 to its non-negative integer `prompt_revision`. This is the source plan's review
 basis, not cached search criteria. Store no project prompt, criteria, name, or description in
-`sources.json`. On repair, refresh the entire mapping immediately before running the installer.
+`sources.json`. On repair, refresh the entire mapping immediately before running the setup builder.
 
 One object per source in `sources.json`, which is also the runtime's **fetch host allowlist** —
 a host absent from it is never fetched.

@@ -20,12 +20,12 @@ Checks:
   files                every path in it exists, with the mode it should have
   location             the private folder is not inside a synced folder
   scheduler            the scheduled job exists and is switched on (read-only query)
-  runtime-size         SKILL.md <=60 lines, JUDGE.md <=50 lines
-  runtime-content      neither file contains anything on the MUST-NEVER list
-  runtime-frontmatter  valid, six spec fields only, disable-model-invocation on Claude
+  runtime-size         optional SKILL.md <=60 lines, JUDGE.md <=50 lines
+  runtime-content      runtime prompt/facade contain nothing on the MUST-NEVER list
+  runtime-frontmatter  optional skill has portable frontmatter
   judge-rules          the four absolute rules, verbatim, and last in the file
   token-leak           no file, log, scheduler definition or state file holds the key
-  no-reprobe           nothing the scheduler runs can reach the installer
+  no-reprobe           no setup package remains installed; the worker cannot reach one
   api-unauth           a call with no key at all is refused     (network)
   api-read             the installed client reads projects      (network)
   state-schema         saved state parses and carries no free text
@@ -34,7 +34,10 @@ Checks:
 it too. The shape it is written in:
 
     {"schema": 1,
-     "paths": {"config": "...", "state": "...", "logs": "...", "skill": "..."},
+     "paths": {"config": "...", "state": "...", "logs": "...", "prompt": "...",
+               "skill": "... or empty"},
+     "runtime_prompt": "<config>/prompts/JUDGE.md",
+     "interactive_skill": {"enabled": true|false, "dir": "...", "copies": []},
      "entries": [{"path": "...", "kind": "dir|config|bin|state|log|scheduler|symlink",
                   "mode": "0700"}],
      "scheduler": {"kind": "launchd|systemd-user|schtasks|container-loop|routine|none",
@@ -317,7 +320,7 @@ def manifest_dirs(manifest, manifest_path, args):
 
 
 def manifest_entries(manifest):
-    """Every path the installer says it created, in one flat list."""
+    """Every path the setup builder says it created, in one flat list."""
     out = []
     seen = set()
 
@@ -566,7 +569,7 @@ def _scheduler_schtasks(report, ident):
 
 
 FRONTMATTER_ALLOWED = ("name", "description", "license", "compatibility", "metadata",
-                       "allowed-tools", "disable-model-invocation")
+                       "allowed-tools")
 
 NEGATION = re.compile(r"\b(never|not|no|don't|do not|cannot|can't|must not|without|"
                       r"refuse|refuses|forbidden|avoid)\b", re.I)
@@ -601,7 +604,7 @@ FORBIDDEN_RULES = (
      re.compile(r"\bnext_query\b|\blearnings\b|"
                 r"[\"'`]?(?:notes?|strategy|remember|memory|hints?|guidance|"
                 r"instructions|scratchpad|todo)[\"'`]?\s*[:=]", re.I), False),
-    ("installer-path", "a path back to the installer",
+    ("setup-path", "a path back to the setup package",
      re.compile(r"homing-setup|install\.py|probe\.sh|probe\.ps1|selftest\.py|"
                 r"\bthe installer\b|setup skill", re.I), False),
     ("reference-file", "a pointer to a reference file",
@@ -652,7 +655,7 @@ def parse_frontmatter(text):
     return fields, ""
 
 
-def find_skill_dirs(manifest, dirs):
+def find_skill_dirs(manifest, dirs, discover_fallback=True):
     """Every installed copy of homing-check, keyed by where it lives."""
     found = []
     seen = set()
@@ -679,41 +682,68 @@ def find_skill_dirs(manifest, dirs):
         if entry["kind"] in ("skill", "symlink", "link") or \
                 os.path.basename(entry["path"]) in ("homing-check", "SKILL.md"):
             push(entry["path"])
-    for root in SKILL_ROOTS:
-        push(os.path.join(os.path.expanduser(root), "homing-check"))
+    if discover_fallback:
+        for root in SKILL_ROOTS:
+            push(os.path.join(os.path.expanduser(root), "homing-check"))
     return found
 
 
-def check_runtime(report, skill_dirs, token):
-    if not skill_dirs:
-        report.bad("runtime-size", "The scheduled instructions (homing-check) are not "
-                                   "installed anywhere this can find.")
-        report.bad("runtime-content", "There is no homing-check skill to inspect.")
-        report.bad("runtime-frontmatter", "There is no homing-check skill to inspect.")
-        report.bad("judge-rules", "There is no JUDGE.md to inspect.")
-        return
+def interactive_skill_expected(manifest):
+    interactive = manifest.get("interactive_skill")
+    if isinstance(interactive, dict) and isinstance(interactive.get("enabled"), bool):
+        return interactive["enabled"]
+    return True  # legacy manifests always installed homing-check
 
+
+def runtime_prompt_path(manifest, dirs, skill_dirs):
+    prompt = manifest.get("runtime_prompt")
+    if isinstance(prompt, str) and prompt:
+        return expand(prompt)
+    prompt_dir = dirs.get("prompt")
+    if prompt_dir:
+        return os.path.join(prompt_dir, "JUDGE.md")
+    config = dirs.get("config", "")
+    candidate = os.path.join(config, "prompts", "JUDGE.md")
+    if os.path.isfile(candidate) or not skill_dirs:
+        return candidate
+    return os.path.join(skill_dirs[0], "JUDGE.md")  # legacy v2 layout
+
+
+def check_runtime(report, skill_dirs, judge_path, token, skill_expected):
     size_problems, content_problems, front_problems, judge_problems = [], [], [], []
-    claude_seen = False
+    if skill_expected and not skill_dirs:
+        size_problems.append("the optional homing-check skill was requested but is missing")
+        content_problems.append("the optional homing-check skill was requested but is missing")
+        front_problems.append("the optional homing-check skill was requested but is missing")
+
+    judge_text = read_text(judge_path) if judge_path else None
+    if judge_text is None:
+        missing = judge_path or "<config>/prompts/JUDGE.md"
+        size_problems.append("%s is missing" % missing)
+        content_problems.append("%s is missing" % missing)
+        judge_problems.append("%s is missing" % missing)
+    else:
+        count = len(judge_text.splitlines())
+        if count > JUDGE_MAX_LINES:
+            size_problems.append("%s is %d lines; the limit is %d"
+                                 % (judge_path, count, JUDGE_MAX_LINES))
+        for rule_id, what, lineno, snippet in scan_forbidden(judge_text, token):
+            content_problems.append(
+                "JUDGE.md:%d %s - %s%s"
+                % (lineno, rule_id, what, (": %s" % snippet) if snippet else ""))
+        judge_problems.extend(check_absolute_rules(judge_path, judge_text))
+
     groups = {}
     for skill_dir in skill_dirs:  # one symlinked directory is one file, checked once
         groups.setdefault(os.path.realpath(skill_dir), []).append(skill_dir)
     for skill_dir, aliases in sorted(groups.items()):
         skill_path = os.path.join(skill_dir, "SKILL.md")
-        judge_path = os.path.join(skill_dir, "JUDGE.md")
         skill_text = read_text(skill_path)
-        judge_text = read_text(judge_path)
         if skill_text is None:
             size_problems.append("%s cannot be read" % skill_path)
             content_problems.append("%s cannot be read" % skill_path)
             front_problems.append("%s cannot be read" % skill_path)
-        if judge_text is None:
-            size_problems.append("%s is missing" % judge_path)
-            content_problems.append("%s is missing" % judge_path)
-            judge_problems.append("%s is missing" % judge_path)
-
-        for path, text, limit in ((skill_path, skill_text, SKILL_MAX_LINES),
-                                  (judge_path, judge_text, JUDGE_MAX_LINES)):
+        for path, text, limit in ((skill_path, skill_text, SKILL_MAX_LINES),):
             if text is None:
                 continue
             count = len(text.splitlines())
@@ -726,7 +756,6 @@ def check_runtime(report, skill_dirs, token):
                     "%s - %s%s" % (where, what, (": %s" % snippet) if snippet else ""))
 
         fields, error = parse_frontmatter(skill_text) if skill_text else (None, "")
-        is_claude = any(".claude" in alias for alias in aliases)
         if fields is None:
             if error:
                 front_problems.append("%s: %s" % (skill_path, error))
@@ -742,27 +771,17 @@ def check_runtime(report, skill_dirs, token):
                 front_problems.append("%s has no description" % skill_path)
             if "allowed-tools" not in fields:
                 front_problems.append("%s does not restrict its tools" % skill_path)
-            if is_claude:
-                claude_seen = True
-                if fields.get("disable-model-invocation", "").lower() != "true":
-                    front_problems.append(
-                        "%s is installed for Claude without disable-model-invocation: "
-                        "true, so it can load itself mid-conversation" % skill_path)
-
-        if judge_text is not None:
-            judge_problems.extend(check_absolute_rules(judge_path, judge_text))
-
     _resolve(report, "runtime-size", size_problems,
-             "Both scheduled instruction files are within their line limits.",
-             "The scheduled instruction files are longer than their limits.")
+             "The worker prompt and optional skill are within their line limits.",
+             "The worker prompt or optional skill is missing or too long.")
     _resolve(report, "runtime-content", content_problems,
-             "Neither scheduled instruction file contains anything from the "
+             "The worker prompt and optional skill contain nothing from the "
              "must-never-contain list.",
-             "The scheduled instructions contain something they must never contain.")
+             "The worker prompt or optional skill contains forbidden setup content.")
     _resolve(report, "runtime-frontmatter", front_problems,
-             "The scheduled instructions declare themselves correctly%s."
-             % (" and cannot load themselves mid-conversation" if claude_seen else ""),
-             "The scheduled instructions' header is wrong.")
+             ("The optional skill declares portable frontmatter."
+              if skill_dirs else "No interactive skill was requested."),
+             "The optional skill's header is wrong.")
     _resolve(report, "judge-rules", judge_problems,
              "The four absolute rules are present word for word, and nothing "
              "instructive follows them.",
@@ -938,7 +957,7 @@ def check_token_leak(report, manifest, dirs, skill_dirs, token, token_note):
                             "anything shaped like one.", notes)
 
 
-# --- check: a scheduled run cannot reach the installer -----------------------
+# --- check: a scheduled run cannot reach the setup package -------------------
 
 
 PATHISH = re.compile(r"\S*/\S*")
@@ -973,8 +992,8 @@ def strip_comment(line):
     return "".join(out)
 
 
-INSTALLER_MARKERS = re.compile(
-    r"homing-setup|install\.py|probe\.sh|probe\.ps1|selftest\.py|"
+SETUP_MARKERS = re.compile(
+    r"homing-setup|SETUP\.md|finalize\.py|install\.py|probe\.sh|probe\.ps1|selftest\.py|"
     r"references/(?:probe|pairing|security|sources|reachability|environments|"
     r"runtime-template|troubleshooting)\.md", re.I)
 
@@ -1077,9 +1096,9 @@ def check_no_reprobe(report, manifest, dirs, skill_dirs):
         for lineno, line in enumerate(text.splitlines(), 1):
             # A comment naming install.py is provenance, not a path a scheduled
             # run can follow. Matching it failed every correct install.
-            match = INSTALLER_MARKERS.search(strip_comment(line))
+            match = SETUP_MARKERS.search(strip_comment(line))
             if match:
-                problems.append("%s:%d reaches the installer (%s)"
+                problems.append("%s:%d reaches the setup package (%s)"
                                 % (path, lineno, match.group(0)))
             danger = DANGEROUS_FLAGS.search(line)
             if danger:
@@ -1103,18 +1122,11 @@ def check_no_reprobe(report, manifest, dirs, skill_dirs):
         problems.append("%s invokes a model without pinning JUDGE.md, so the scheduled "
                         "run can load other instructions" % seeds[0])
     if saw_model_line and judge_pinned:
-        notes.append("the model is invoked with JUDGE.md pinned as its only prompt")
+        notes.append("the model is invoked with JUDGE.md pinned as its explicit task prompt")
 
-    for skill_dir in _installer_skill_dirs(skill_dirs):
-        text = read_text(os.path.join(skill_dir, "SKILL.md"))
-        fields = parse_frontmatter(text)[0] if text else None
-        invocable = not fields or fields.get("disable-model-invocation", "").lower() != "true"
-        if invocable and ".claude" in skill_dir:
-            problems.append("the installer skill at %s can still be model-invoked; it "
-                            "needs disable-model-invocation: true" % skill_dir)
-        elif invocable:
-            notes.append("an installer skill is present at %s (not on a Claude path)"
-                         % skill_dir)
+    for setup_dir in _setup_residue_dirs(skill_dirs):
+        problems.append("legacy setup instructions remain installed at %s; setup must be "
+                        "ephemeral in every supported agent environment" % setup_dir)
 
     notes.append("walked %d file(s) from %s" % (len(walked), seeds[0]))
     if problems:
@@ -1126,7 +1138,7 @@ def check_no_reprobe(report, manifest, dirs, skill_dirs):
                             "instructions.", notes)
 
 
-def _installer_skill_dirs(skill_dirs):
+def _setup_residue_dirs(skill_dirs):
     found = []
     roots = set()
     for skill_dir in skill_dirs:
@@ -1134,9 +1146,19 @@ def _installer_skill_dirs(skill_dirs):
     for root in SKILL_ROOTS:
         roots.add(os.path.expanduser(root))
     for root in sorted(roots):
-        candidate = os.path.join(root, "homing-setup")
-        if os.path.isfile(os.path.join(candidate, "SKILL.md")):
-            found.append(candidate)
+        try:
+            os.lstat(root)
+            names = set(os.listdir(root))
+        except OSError as exc:
+            if getattr(exc, "errno", None) == 2:
+                continue
+            found.append("%s (could not inspect: %s)" %
+                         (root, getattr(exc, "strerror", None) or exc))
+            continue
+        for name in ("homing-setup", "homing-agent-kit"):
+            candidate = os.path.join(root, name)
+            if name in names:
+                found.append(candidate)
     return found
 
 
@@ -1533,14 +1555,16 @@ def main(argv=None):
 
     dirs = manifest_dirs(manifest, manifest_path, args)
     entries = manifest_entries(manifest)
-    skill_dirs = find_skill_dirs(manifest, dirs)
+    skill_expected = interactive_skill_expected(manifest)
+    skill_dirs = find_skill_dirs(manifest, dirs, discover_fallback=skill_expected)
+    judge_path = runtime_prompt_path(manifest, dirs, skill_dirs)
 
     token, token_note = read_stored_token(manifest, not args.no_secret_read)
     try:
         check_files(report, entries, dirs)
         check_location(report, dirs)
         check_scheduler(report, manifest)
-        check_runtime(report, skill_dirs, token)
+        check_runtime(report, skill_dirs, judge_path, token, skill_expected)
         check_token_leak(report, manifest, dirs, skill_dirs, token, token_note)
     finally:
         token = None  # held only for the comparisons above

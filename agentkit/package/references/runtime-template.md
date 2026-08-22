@@ -7,7 +7,7 @@ disagrees with this file, `--help` wins.
 
 ---
 
-## 1. `homing-check/SKILL.md` — user-invocable only. ≤60 lines, ≤450 tokens.
+## 1. `homing-check/SKILL.md` — optional interactive facade. ≤60 lines, ≤450 tokens.
 
 Portable copy (six spec fields only — `name, description, license, compatibility, metadata,
 allowed-tools`; any other key hard-errors on claude.ai upload and the Skills API):
@@ -59,20 +59,18 @@ called directly as black-box scripts rather than ingested into your context wind
 Read `{{STATE}}/last-run.json` and say what it contains in plain words. Never read the raw log.
 ````
 
-The **Claude Code copy** is byte-identical except for two added frontmatter keys:
+The **Claude Code copy** differs only by narrowing the Bash tool to the generated runner:
 
 ```yaml
-disable-model-invocation: true
 allowed-tools: Bash({{CONFIG}}/bin/run.sh *)
 ```
 
-`disable-model-invocation: true` removes ~80 tokens from every interactive session's skill
-listing and stops a mid-conversation accident; `/homing-check` and scheduler invocation both
-still work.
+Invocation behavior stays portable: when installed, this is the one legitimate skill that may
+match a plain request such as "check Homing." A scheduler-only installation omits the skill.
 
 ---
 
-## 2. `homing-check/JUDGE.md` — the only prompt a scheduled run feeds a model. ≤50 lines, ≤900 tokens.
+## 2. `<config>/prompts/JUDGE.md` — the only explicit task prompt. ≤50 lines, ≤900 tokens.
 
 ````markdown
 # Score candidate places
@@ -132,10 +130,10 @@ Now score every record in `candidates.jsonl` and write `scored.jsonl`.
 
 The key, its path, or its store name · any Homing API URL or endpoint · discovery logic · any
 environment conditional (`if macOS…`) · scheduler or secret-store details · any instruction to
-fetch a URL · any free-text state field · any path to the installer · a reference file.
+fetch a URL · any path to the setup package · any free-text state field · a reference file.
 
-Both files are ≤60 and ≤50 lines respectively. If a template overflows, cut content — never the
-verbatim blocks (the black-box paragraph, the four absolute rules).
+The optional skill and worker prompt are ≤60 and ≤50 lines respectively. If a template overflows,
+cut content — never the verbatim blocks (the black-box paragraph, the four absolute rules).
 
 ---
 
@@ -224,7 +222,7 @@ a list with one entry per argument**:
             "invocation_argv": ["claude", "--bare", "-p",
                                 "--permission-mode", "dontAsk",
                                 "--max-budget-usd", "0.50",
-                                "--append-system-prompt-file", "{{SKILL_DIR}}/JUDGE.md"]}
+                                "--append-system-prompt-file", "{{PROMPT_DIR}}/JUDGE.md"]}
 ```
 
 Each entry is rendered through the platform quoter, so an entry containing `;`, `&&`, `|`,
@@ -242,11 +240,11 @@ Never a flag containing "dangerous", "yolo", "bypass" or "skip-permissions"; if 
 unattended form the runtime offers, do not schedule it. That check is a second line — the first
 is that no command line is ever assembled.
 
-The model gets `JUDGE.md` and two files in `<state>/work/`. It gets no shell, no network of its
-own, no credential and no other file on the machine, and it is killed at `{{MODEL_SECONDS}}`
-seconds. `homing.py` reads the key itself, at call time, from the OS store; `run.sh` never
-touches it, and no key is ever in an argument or an environment value — only the *name* of the
-store is.
+The model gets `JUDGE.md` and two files in `<state>/work/` as its explicit task input. The
+selected runtime adapter must separately restrict tools, network, and filesystem access. It is
+killed at `{{MODEL_SECONDS}}` seconds. `homing.py` reads the key itself, at call time, from the OS
+store; `run.sh` never touches it, and no key is ever in an argument or an environment value —
+only the *name* of the store is.
 
 ## 5. `bin\run.ps1` (Windows equivalent)
 
@@ -405,7 +403,7 @@ ends the cycle rather than looping.
 | Component | Budget |
 |---|---|
 | Harness startup + tool schemas | ≤12,000 (≈3,000 via `--append-system-prompt-file` instead of skill discovery) |
-| Skill listing | 0 (`disable-model-invocation`) |
+| Optional skill listing | runtime-dependent ambient cost; absent from scheduler invocation |
 | `JUDGE.md` | ≤900 |
 | Project prompts (≤3 × 800) | ≤2,400 |
 | `candidates.jsonl` (≤40 × 600 B) | ≤6,000 |

@@ -7,7 +7,7 @@ Do not read it into a model's context, and do not reimplement it with curl.
     homing.py --help
     homing.py projects
     homing.py leads-upsert --project <uuid> --items-file leads.json
-    homing.py pair-request --label "Claude on the laptop" \
+    homing.py pair-request --label "Homing on the laptop" \
         --out <state>/pair-request.json --device-code-out <private>/device-code
     homing.py pair-poll --device-code-file <private>/device-code --store \
         --result <state>/pair-result.json
@@ -200,7 +200,7 @@ def _token_from_keychain():
     argv += ["-w"]
     out, rc = _run_quiet(argv)
     if rc == 44:
-        die(EXIT_CONFIG, "no key in the login keychain; run set-token.sh")
+        die(EXIT_CONFIG, "no key in the login keychain; reconnect from Homing's /agent/ page")
     if rc != 0 or not out:
         die(EXIT_CONFIG, "keychain unavailable (status %s)" % rc)
     return out.decode("utf-8", "replace").strip("\r\n")
@@ -255,7 +255,7 @@ def _token_from_file():
             value = handle.read(4096).decode("utf-8", "replace").strip("\r\n")
         if value:
             return value
-    die(EXIT_CONFIG, "no key file found; run set-token.sh")
+    die(EXIT_CONFIG, "no key file found; reconnect from Homing's /agent/ page")
 
 
 _TOKEN_CACHE = []

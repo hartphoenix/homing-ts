@@ -3,7 +3,7 @@ import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { requestId } from "hono/request-id";
 import { secureHeaders } from "hono/secure-headers";
-
+import { registerAgentKitRoutes } from "./agentkit/package";
 import { getDatabase } from "./db/client";
 import { errorResponse, HomingError } from "./http";
 import { requestLogger } from "./logging";
@@ -11,6 +11,7 @@ import type { AppVariables } from "./types";
 
 type AppDependencies = {
   ready?: () => Promise<boolean>;
+  publicOrigin?: string;
 };
 
 async function databaseReady(): Promise<boolean> {
@@ -61,6 +62,8 @@ export function createApp(dependencies: AppDependencies = {}) {
     }
     return context.json({ status: "ready" });
   });
+
+  registerAgentKitRoutes(app, dependencies.publicOrigin ?? "http://localhost:8000");
 
   app.all("/api/*", () => {
     throw new HomingError("not_found", "Object not found.", 404);

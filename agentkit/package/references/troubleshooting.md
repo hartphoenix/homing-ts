@@ -14,8 +14,8 @@ answers and conflating them is the most common wrong turn.
    facts.
 
 **Re-run by hand:** `<config>/bin/run.sh` (or `run.ps1`) — the same command the scheduler uses,
-no arguments. Never re-run the installer to test a run: a scheduled fire must never load the
-installer, and Phase 8 asserts it.
+no arguments. Never fetch or run the setup package to test a worker: a scheduled fire must never
+load setup guidance, and Phase 8 asserts it.
 
 **Repair:** read `<state>/install-manifest.json`, verify every path in it still exists with the
 recorded mode, re-register only what is missing, re-run `selftest.py`. Never build a second

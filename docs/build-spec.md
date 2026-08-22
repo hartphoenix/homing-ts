@@ -5,7 +5,7 @@ Status: foundation in progress.
 ## Outcome
 
 The replacement preserves the agent-facing API, authorization model, collaborative project
-semantics, and unchanged public agent-kit while replacing Django templates and server code with a
+semantics, and public agent-kit behavior while replacing Django templates and server code with a
 Bun/Hono/React application.
 
 ## Initial browser product
@@ -33,7 +33,7 @@ Tier 1. Performance profiling begins only after the functional release candidate
 
 ## Contract decisions
 
-- The unchanged `agentkit/package/scripts/homing.py` client is the primary wire-contract consumer.
+- `agentkit/package/scripts/homing.py` is the primary wire-contract consumer.
 - Browser administration and all account/project administration are session-only.
 - Every active member role may edit project content. Owner status governs membership administration,
   project trash, comment moderation, and the final-owner invariant.
@@ -49,8 +49,8 @@ Tier 1. Performance profiling begins only after the functional release candidate
   existing `410 cursor_expired` envelope. A fresh empty feed returns `<feed_epoch>:0`.
 - User and comment identifiers remain integer/bigint. Project, token, run, lead, and review IDs are
   UUIDs.
-- The public kit manifest adds `first_line`, `last_line`, top-level `min_runtime_version`, and
-  `archive.url`, repairing promises already made by the unchanged bootstrap page.
+- The public kit manifest includes `first_line`, `last_line`, top-level
+  `min_runtime_version`, and `archive.url`.
 
 ## API invariants
 

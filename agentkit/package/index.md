@@ -5,10 +5,10 @@ holding a written description of the home they are looking for. This page hands 
 package — the **homing-agent-kit** — that sets up a recurring search and files what it finds into
 those projects.
 
-**What you are about to do:** fetch the package, then load `SKILL.md` and follow it exactly. That
-is an installer procedure named `homing-setup`: inspect this environment, connect to the owner's
-Homing account without a key passing through the chat, build a small scheduled search, verify it,
-report back in plain sentences.
+**What you are about to do:** fetch a temporary package, then load `SETUP.md` and follow it
+exactly. It is a one-time setup prompt: inspect this environment, connect to the owner's Homing
+account without a key passing through the chat, build a small scheduled search, verify it, remove
+the temporary package, and report back in plain sentences.
 
 Nothing here is secret. The only secret in this system is the account key, and you never see it.
 
@@ -43,18 +43,25 @@ block holding the zip URL and its digest, the package `version`, and `min_runtim
 
 ### Ladder A — byte-exact
 
-1. `GET __HOMING_ORIGIN__/agent/pkg/manifest.json`.
-2. Download `archive.url` and unzip it into a temporary directory.
-3. Compute the sha256 of **each extracted file on disk** and compare it with that file's `sha256`
-   in the manifest. Verify after writing, never in flight.
-4. Any mismatch, missing file, or file not in the manifest: stop and report. Never install a
-   partial package.
+1. Stream `GET __HOMING_ORIGIN__/agent/bootstrap.py` into Python 3.9+ and give it the single
+   argument `__HOMING_ORIGIN__`. Do not save it in a skill or durable resource.
+2. The bootstrap fetches the manifest and archive itself. It authenticates the complete archive
+   bytes before opening it, then rejects absolute, parent, duplicate, encrypted, linked, special,
+   oversized, missing, or extra members before writing any package member.
+3. Capture its one stdout line: the new verified temporary directory whose name starts with
+   `homing-agent-kit-`. Any error means stop and report; never fall back to a generic unzip tool.
+4. Run `scripts/finalize.py --help`, then initialize this exact verified workspace with its
+   `--init` form. Keep all setup-only scratch files inside it. `SETUP.md` removes it after the
+   completed self-test and first real check.
 
 ### Ladder B — file by file
 
 Fetch `__HOMING_ORIGIN__/agent/pkg/<path>` for each entry in `files` and write it. Verify by
 sha256 if you can compute one; otherwise verify structurally as in Ladder C. A mismatch stops the
-install the same way.
+setup the same way. Keep every downloaded file in one temporary directory named
+`homing-agent-kit-*`. After setup succeeds, delete every file listed by the manifest, the saved
+manifest, and that directory. If the file-writing tool cannot remove them, report the remaining
+directory instead of claiming cleanup succeeded.
 
 ### Ladder C — read in place
 
@@ -72,7 +79,7 @@ the file, not the file. Three consequences, none negotiable:
 
 Fetch in this order, and only as far as the procedure actually takes you:
 
-1. `pkg/SKILL.md` — always, first.
+1. `pkg/SETUP.md` — always, first.
 2. `pkg/references/probe.md` — Phase 1.
 3. `pkg/references/pairing.md` — Phase 2.
 4. `pkg/references/sources.md`, then `pkg/references/reachability.md` — Phase 4.
@@ -81,15 +88,16 @@ Fetch in this order, and only as far as the procedure actually takes you:
 7. `pkg/references/troubleshooting.md` — only when something has failed.
 
 No shell means no probe script, no scheduler, and no generated files. That is a supported outcome,
-not a failure: `SKILL.md` routes you to connect the account and then to run the search yourself
-whenever the person asks. Say so plainly rather than implying a schedule exists.
+not a failure: `SETUP.md` routes you to connect the account and then to run the search yourself
+whenever the person asks. The fetched prose remains only in this conversation's context; do not
+persist it as a skill or resource. Say so plainly rather than implying a schedule exists.
 
 ## Then
 
-Load `SKILL.md` and follow it in order from Phase 0. Do not skip Phase 1.
+Load `SETUP.md` and follow it in order from Phase 0. Do not skip Phase 1.
 
 `__HOMING_ORIGIN__/agent/pkg/VERSION` holds one integer. A higher number than the installed one
-means a newer package exists; only a person re-running this installer may act on that. A scheduled
+means a newer package exists; only a person starting a fresh setup may act on that. A scheduled
 run never upgrades itself.
 
 ## If you are a person reading this

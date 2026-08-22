@@ -7,7 +7,7 @@ Load this in Phase 1, before you ask the user anything.
 Run `scripts/probe.sh` (POSIX) or `scripts/probe.ps1` (Windows) **one time**. One subprocess,
 one JSON blob on stdout, read-only. Never re-run it per decision, and never inside the
 scheduled job. No shell tool at all → the probe cannot run; take the no-shell branch in
-`SKILL.md`.
+`SETUP.md`.
 
 Three things it deliberately does not do, and neither do you:
 
@@ -67,10 +67,10 @@ Four different things produce "it didn't work". They mean four different things 
 Two misreads to guard against, both observed in the wild:
 
 - **Signature 2 read as "not installed."** `crontab -l` failing under a sandbox does not mean
-  cron is missing; it usually works fine outside. This makes an installer skip scheduling it
+  cron is missing; it usually works fine outside. This makes setup skip scheduling it
   could have had.
 - **Signature 4 read as "I'm blocked."** A site returning 403 to an honest client is not a
-  local restriction. This makes an installer conclude a reachable site is down.
+  local restriction. This makes setup conclude a reachable site is down.
 
 ## Reading the network block
 

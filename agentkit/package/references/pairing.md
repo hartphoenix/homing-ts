@@ -22,23 +22,24 @@ run one line, then read the two safe files it writes.
 
 | Path | Mode | What it is |
 |---|---|---|
-| `<config>/connect.sh` (POSIX) / `<config>/connect.ps1` (Windows) | 0700 | the one line a person runs; holds no key |
+| `<setup>/connect.sh` (POSIX) / `<setup>/connect.ps1` (Windows) | 0700 | the one line a person runs; holds no key; deleted when setup ends |
 | `<config>/bin/homing.py` | 0500 | the client both calls go through |
-| `<config>/private/device-code.json` | 0600 | the device code, raw, alone. **Never read this.** Deleted when pairing ends |
-| `<state>/pairing.json` | 0600 | safe metadata: `user_code`, links, `expires_at`, `interval`. Read this |
-| `<state>/pairing-result.json` | 0600 | outcome only: `paired`, `error_class`, `expires_at`, `scopes`. Read this |
-| `<config>/set-token.sh` / `.ps1` | 0700 | the fallback of Path B, when pairing cannot be used at all |
+| `<setup>/private/device-code.json` | 0600 | the device code, raw, alone. **Never read this.** Deleted when pairing ends |
+| `<setup>/pairing.json` | 0600 | safe metadata: `user_code`, links, `expires_at`, `interval`. Read this |
+| `<setup>/pairing-result.json` | 0600 | outcome only: `paired`, `error_class`, `expires_at`, `scopes`. Read this |
+| `<setup>/set-token.sh` / `.ps1` | 0700 | the fallback of Path B, when pairing cannot be used at all; deleted when setup ends |
 
-`<config>/private/` exists only for the pairing helper. It is named in no config file, no state
-file and no skill file, and nothing else in the install points at it.
+`<setup>/private/` exists only for the pairing helper. It is named in no durable config, state,
+prompt, or skill file. The setup agent reads the two safe result files beside it, never this
+directory. Finalization or discard removes the complete setup package.
 
 1. Tell the user to run exactly one line and leave the window open:
-   `sh <config>/connect.sh` — or `powershell -NoProfile -ExecutionPolicy Bypass -File
-   <config>\connect.ps1` on Windows.
+   `sh <setup>/connect.sh` — or `powershell -NoProfile -ExecutionPolicy Bypass -File
+   <setup>\connect.ps1` on Windows.
 2. The script runs `pair-request`, prints the code and the link itself, and waits.
-3. Read `<state>/pairing.json` and say the wording below, so the code the user sees on screen,
+3. Read `<setup>/pairing.json` and say the wording below, so the code the user sees on screen,
    the code you say, and the code on the approval card are the same three codes.
-4. When the script exits, read `<state>/pairing-result.json`. That file is the whole answer.
+4. When the script exits, read `<setup>/pairing-result.json`. That file is the whole answer.
 
 ### The contract between the wrapper and the client
 
@@ -47,16 +48,16 @@ and they call these two commands and nothing else. The exact lines, with the exa
 
 ```
 "$PY" "$HOMING_PY" pair-request --label <worker label> --note <machine name> \
-      --cadence <minutes> --out "<state>/pairing.json" \
-      --device-code-out "<config>/private/device-code.json"
+      --cadence <minutes> --out "<setup>/pairing.json" \
+      --device-code-out "<setup>/private/device-code.json"
 
-"$PY" "$HOMING_PY" pair-poll --device-code-file "<config>/private/device-code.json" \
-      --store --result "<state>/pairing-result.json"
+"$PY" "$HOMING_PY" pair-poll --device-code-file "<setup>/private/device-code.json" \
+      --store --result "<setup>/pairing-result.json"
 ```
 
 Rules the wrapper must keep:
 
-- `umask 077` before creating anything, and `<config>/private/` at 0700. Never create wide and
+- `umask 077` before creating anything, and `<setup>/private/` at 0700. Never create wide and
   narrow afterwards.
 - `trap 'rm -f "$DEVICE_CODE"' EXIT INT TERM HUP` (PowerShell: `finally { Remove-Item -Force }`).
   `pair-poll` deletes the file itself on every ending, including Ctrl-C; the trap covers the
@@ -125,7 +126,7 @@ homing.py pair-poll --device-code-file <path> [--store] [--result <path>]
 
 ```
 POST __HOMING_ORIGIN__/api/v1/agent-link
-{"agent_label": "Claude on Hart's MacBook",
+{"agent_label": "Homing on the laptop",
  "environment_note": "macOS laptop, runs while logged in",
  "requested_cadence_minutes": 1440}
 
@@ -190,7 +191,7 @@ Then, in every case:
 **This is the second choice and you say so.** Use it only when pairing genuinely cannot work
 here: no outbound POST at all, or a store that only a person at the keyboard can write. The
 user opens Homing, creates an access key in the web UI, and pastes it into
-`<config>/set-token.sh` / `.ps1`, which reads it without echoing and puts it in the same store.
+`<setup>/set-token.sh` / `.ps1`, which reads it without echoing and puts it in the same store.
 
 Say the true sentence before they start: **"To do it this way I'll have to see your access key,
 and it will pass through your clipboard and possibly this chat. If you'd rather not, we can stop
@@ -207,6 +208,6 @@ call `POST /auth/token`.
 | `401` | The key stopped working. Stop all writes. Do not retry, do not loop, do not prompt, do not rotate. After two consecutive 401s disable the timer and send one notification, ever: "Homing needs you to reconnect." |
 | `403` | A permission problem, not an expiry. Never rotate and never re-pair. Record which call and which project, and report it. Trash, restore, and delete are **expected** to 403 — that is the design, not a fault. |
 
-Rotation, when the user asks for it: pair again with `connect.sh` — it writes the new key over
-the old one in the store and verifies it — and only then revoke the old key in the web UI.
-Never revoke first. The connect script is the rotation script.
+Rotation, when the user asks for it: fetch a fresh setup package and pair again with its
+`connect.sh`. It writes the new key over the old one and verifies it; only then revoke the old key
+in the web UI. Never revoke first. No rotation helper persists after setup.

@@ -2,7 +2,7 @@ import { createApp } from "./app";
 import { getConfig } from "./config";
 
 const config = getConfig();
-const app = createApp();
+const app = createApp({ publicOrigin: config.PUBLIC_ORIGIN });
 
 const server = Bun.serve({
   fetch: app.fetch,

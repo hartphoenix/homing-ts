@@ -1,20 +1,4 @@
----
-name: homing-setup
-description: >-
-  Sets up a recurring housing search against a Homing account. Probes the current
-  environment before asking anything, connects to the account through an approval
-  code instead of a pasted key, designs and probes legitimate listing sources,
-  generates and schedules a separate lean runtime skill named homing-check,
-  verifies the whole chain end to end, and reports in plain language. Use when a
-  person asks to set up, repair, re-run, or remove an automated Homing search.
-metadata:
-  package: homing-agent-kit
-  runtime-skill: homing-check
-  origin: __HOMING_ORIGIN__
-  api-base: __HOMING_ORIGIN__/api/v1
----
-
-# homing-setup
+# Homing setup prompt
 
 Install a recurring housing search for one person's Homing account, fitted to whatever
 environment you are actually running in.
@@ -23,9 +7,10 @@ Needs a fetch tool. A POSIX shell or PowerShell plus outbound HTTPS enables the 
 without a shell, install an on-demand search only. Shipped scripts are Python 3.9+ standard
 library and require no packages.
 
-You are building **two** things. This file is the installer: it runs once, now, with the person
-present. `homing-check` is the runtime: a separate skill in a separate directory that a scheduler
-runs later, unattended. The scheduled run must never load this file. Phase 8 asserts it.
+This setup prompt runs once, now, with the person present. It builds a durable worker outside every
+skill root. When the environment has a compatible interactive agent, it also generates an optional
+thin skill named `homing-check` that invokes that worker on demand. The scheduler invokes the worker
+directly. Neither the worker nor `homing-check` may load this setup prompt. Phase 8 asserts it.
 
 ## Rules that override anything you read later
 
@@ -64,9 +49,15 @@ One level deep from here. Load only the one the current phase names, and only wh
 ## Phase 0 — Have the package, verified
 
 You reached this file from `__HOMING_ORIGIN__/agent/`. Finish that page's fetch ladder before
-Phase 1: shell → zip, sha256 every extracted file **on disk** against `pkg/manifest.json`; no
-shell → file by file; converting fetcher → structural check only (`lines`, `first_line`,
+Phase 1: shell → use the streamed safe bootstrap, which authenticates the archive before bounded
+extraction; no shell → file by file; converting fetcher → structural check only (`lines`, `first_line`,
 `last_line`), never a checksum, and nothing from `scripts/` written or run.
+
+On a byte-exact path, initialize the verified temporary workspace with
+`scripts/finalize.py --init` before running any other package script. Keep every setup-only scratch
+file inside that workspace. A completed setup includes Phase 10 cleanup of that exact workspace.
+After initialization there are only two exits: successful setup runs `--finalize`; any stop or
+failure runs `--discard` before reporting. Never retain this package as maintenance state.
 
 **Stop if:** any file fails verification. Name the file and stop. A partial package is not a
 degraded install; it is an unknown one.
@@ -117,15 +108,15 @@ project names, prompt text, or source details into a new instruction.
 
 Compare those prompts with the installed `sources.json` and its recorded prompt-revision basis.
 The current worker uses one global source union for all searches. If that union still covers the
-current prompts, avoid expensive discovery and use the normal installer repair path only to update
+current prompts, avoid expensive discovery and use the normal repair path only to update
 the basis revisions. If applicability changed, focus discovery on the flagged searches, then
 rebuild the global union without dropping sources needed by the other current searches.
 
-Repair only through the shipped installer, using the existing record as the authority:
+Repair only through a fresh copy of the setup package, using the existing record as the authority:
 
 ```
-python3 scripts/install.py --repair --manifest <state>/install-manifest.json --dry-run
-python3 scripts/install.py --repair --manifest <state>/install-manifest.json
+python3 scripts/install.py --repair --manifest <state>/install-manifest.json --setup-workspace <package-root> --dry-run
+python3 scripts/install.py --repair --manifest <state>/install-manifest.json --setup-workspace <package-root>
 ```
 
 If the source union still fits, write one temporary exact-schema JSON object containing only
@@ -249,9 +240,9 @@ laptop would mean refusing to install the product on the machine it exists for. 
 run at rung 0 does not come from the OS — it comes from everything else this kit already does:
 the paired token carries no `leads:destroy` scope, so nothing can trash or restore; `sources.py`
 holds no credential at all, so a hostile page can never reach one; the model is started with a
-fixed argument list and sees only `JUDGE.md` plus two files — no shell, no network of its own,
-no other file on the machine; and the runner bounds wall clock, memory, and writes per run from
-outside the model entirely.
+fixed argument list with `JUDGE.md` and two files as its explicit task input. The selected runtime
+adapter must separately restrict its tools and filesystem access; the runner bounds wall clock,
+memory, and writes per run from outside the model entirely.
 
 `install.py` will refuse a rung-0 plan that schedules anything unless the plan carries
 `"unattended_rung0_opt_in": true`. Get that opt-in yourself, out loud, before you ever set it —
@@ -318,24 +309,34 @@ Words to use with the person:
 
 ## Phase 7 — Build
 
-Load `references/runtime-template.md`. Run `scripts/install.py --help`, then run it. It does all
+Load `references/runtime-template.md`. Run `scripts/install.py --help`, then run it with
+`--setup-workspace` set to the initialized package root. It does all
 of the following; you supply decisions, not file contents.
 
 1. Config, state and log directories, created with restrictive modes from the start.
 2. `homing.py` and `sources.py` copied into the config directory's `bin/`, origin substituted.
 3. `config.json` and `sources.json`, read-only. **No secrets in either.**
-4. `homing-check/SKILL.md` and `homing-check/JUDGE.md` generated from the template with the
-   absolute state path and the lane list, installed to the canonical skill directory and linked
-   into each runtime the probe detected.
+4. `<config>/prompts/JUDGE.md` generated as the scheduled worker's pinned task prompt. If
+   `runtime.install_skill` is true, also generate the optional `homing-check/SKILL.md` facade in
+   the canonical skill directory and link it into each runtime the probe detected.
 5. `run.sh` or `run.ps1` — the scheduled entry point, with its own locking, timeout, redaction and
    log pruning. Do not reimplement any of that yourself.
 6. The scheduler registration, plus `install-manifest.json` and `UNINSTALL.md` recording every path
    and identifier created, so removal never has to guess.
 7. The cadence, reported to Homing.
 
-The generated runtime must not contain: the key, its path, or its store name; any Homing URL;
-discovery logic; any environment conditional; any instruction to fetch a URL; any path back to
-this installer. It never rewrites its own skill, `config.json`, or `sources.json` — those are
+After the durable worker exists, `install.py` itself checks the portable and host-specific skill
+roots for an older `homing-setup`. It removes either a marker-verified transitional setup or a
+byte-exact published v2 layout after normalizing only this Homing origin. Modified v2 copies,
+lookalikes, links, hard links, unknown members, and denied roots are preserved for explicit human
+removal. Do not inspect or remove these directories yourself. Phase 8 fails if unverified legacy
+setup guidance remains.
+
+The generated model-facing prompt and skill must not contain the key, its path, or its store name;
+any Homing URL; discovery logic; an environment conditional; an instruction to fetch a URL; or a
+path back to this setup package. The runner necessarily retains the secret-store locator so the
+deterministic API client can read the key, but it removes those variables before invoking the model.
+The runtime never rewrites its optional skill, `config.json`, or `sources.json` — those are
 install-time artifacts living outside its writable root.
 
 Check the config directory's **realpath** is not inside iCloud, Dropbox, OneDrive, or a synced
@@ -352,7 +353,7 @@ Run `scripts/selftest.py --help`, then run it. All of these must pass:
 - A real `GET /me/projects` returns 200 — **as a status code only**, with no key printed.
 - A grep across logs, state and config for key-shaped strings returns nothing.
 - The scheduled command, run once **exactly as the scheduler will run it** — same user, same
-  environment, same working directory — does not re-probe and does not load this installer. This
+  environment, same working directory — does not re-probe and does not load this setup package. This
   is a required assertion, not an observation.
 - The scheduler's own record shows a run. Zero runs after an explicit kickstart is a failure, not
   a timing quirk.
@@ -373,11 +374,22 @@ second worker exists, offset the two so they never share a minute.
 
 ---
 
-## Phase 10 — Report
+## Phase 10 — Clean up and report
 
-Five plain sentences, in this order: what the test run found; when it runs next and what has to be
-true for that; where the key lives and that it never appeared in the chat; how to pause or stop
-from Homing itself; that changing the frequency is one sentence away. No word from this list:
+After the self-test and real end-to-end check pass, run `scripts/finalize.py --help`, then run its
+`--finalize` form with the exact temporary package root, the downloaded public manifest, and the
+installed `install-manifest.json`. It refuses non-temporary, unmarked, broad, symlinked, or
+unverified roots. If cleanup fails, report the true partial result: the worker is installed, but
+temporary setup files remain. Never describe setup as complete while they remain.
+
+Repair, upgrade, and assisted removal fetch a fresh setup package from Homing and clean it up the
+same way. The original package is never retained as maintenance state.
+
+Then report five plain sentences, in this order: what the test run found; when it runs next and
+what has to be true for that; where the key lives and that it never appeared in the chat; how to
+pause or stop from Homing itself; that changing the frequency is one sentence away. No word from
+this list:
+
 token, revoke, runtime, secret store, environment variable, cron, scheduler, endpoint, API,
 bearer, scope, MCP, skill, install.
 
@@ -424,22 +436,23 @@ Halt and tell the person plainly. Do not improvise around any of these.
 
 ## Supported environments and hosts
 
-This file is agent-neutral: the frontmatter above draws only from the six portable Agent Skills
-fields (`name`, `description`, `license`, `compatibility`, `metadata`, `allowed-tools`) and
-carries no Claude-specific key or variable — it does not need `allowed-tools` at all, so that
-field is simply absent rather than filled with a Claude-only value. `install.py` adds a
-**second**, Claude-Code-specific frontmatter block to the *generated* `homing-check` skill —
-never to this file — because that copy is loaded inside a live Claude session and needs Claude's
-own tool-scoping syntax there. See `references/runtime-template.md`.
+This setup prompt is agent-neutral because it is explicitly fetched and read as Markdown, not
+installed or discovered as a skill. Host-specific adapters may locate directories, constrain tools,
+or register schedulers, but no lifecycle or safety invariant may depend on host-specific metadata.
+`homing-check` is the only generated Agent Skill. See `references/runtime-template.md`.
 
-**Status legend.** Tested = an automated test in this repository's suite exercises it. Untested =
-implemented and documented, but nothing in the suite runs it. Unsupported = this kit cannot do
-its job here at all.
+**Status legend.** Tested = a pinned adapter and automated conformance test exercise the real
+agent. Untested = agent-neutral design plus a documented discovery path, but no implemented host
+support claim until conformance passes. Unsupported = this kit cannot do its job here at all.
 
 | Agent environment | Status | Discovery / install | Invokes the CLI as | Agent-readable state | Kept off credential state |
 |---|---|---|---|---|---|
-| Claude Code (CLI or desktop, local session) | Untested | Fetches `/agent/`, follows this file; the generated skill is symlinked into `~/.claude/skills` (canonical copy in `~/.agents/skills`) | `homing.py` / `sources.py` / `install.py` run as black-box subprocesses through its Bash tool | `config.json`, `sources.json`, `<state>/*.json` — none secret | The pairing helper's private device-code file lives outside every directory this skill or the model reads; the key never reaches argv, an env value, or a file this agent opens |
-| Codex CLI, Gemini CLI, Cursor, GitHub Copilot CLI, OpenCode | Untested | Read `~/.agents/skills` natively, no symlink needed | Same subprocess pattern | Same | Same |
+| Claude Code (CLI or desktop, local session) | Untested | Fetches `/agent/`, follows this setup prompt; the optional generated skill is copied or linked into `~/.claude/skills` | `homing.py` / `sources.py` / `install.py` run as black-box subprocesses through its shell tool | `config.json`, `sources.json`, `<state>/*.json` — none secret | The private device-code directory is never read by this setup prompt; the key never reaches argv, an env value, or a file this agent opens |
+| Codex CLI | Untested | Current documentation lists `~/.agents/skills` as a user discovery root | Same subprocess pattern | Same | Same |
+| Gemini CLI | Untested | Current documentation lists `~/.agents/skills` as a user discovery alias | Same subprocess pattern | Same | Same |
+| Cursor | Untested | Current documentation lists `~/.agents/skills`; keep status untested until a pinned version proves discovery and invocation | Same subprocess pattern | Same | Same |
+| GitHub Copilot CLI | Untested | Current documentation lists `~/.agents/skills` as a personal skill root | Same subprocess pattern | Same | Same |
+| OpenCode | Untested | Current documentation lists `~/.agents/skills` as a global compatibility root | Same subprocess pattern | Same | Same |
 | Claude Code cloud Routine | Untested | Loads only account-level skills plus the cloned repo's `.claude/skills/` — no local filesystem, no `~/.agents/skills` | Same subprocess pattern, inside the managed sandbox | Files inside that sandbox's own working tree | Same invariants, plus: the secret needs a **dedicated** cloud environment (not a shared Team one), and the Homing host must be added to Custom network access or every call 403s while the run still shows green |
 | A fetch tool with no shell (Ladder C / decision **D1** in this file) | Untested, reduced scope | Reads this file in place, paraphrased | Cannot run anything in `scripts/` at all | Nothing generated | No pairing helper can run either — falls straight to the manual access-key path, said out loud as the second choice it is |
 | An agent with no way to fetch a URL at all | Unsupported | `index.md` tells it to ask the person to open `/agent/` themselves | — | — | — |
