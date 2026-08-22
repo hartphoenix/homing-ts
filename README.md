@@ -11,12 +11,13 @@ the replacement sprint.
 
 ```sh
 bun install
-bun run db:migrate
+bun run dev:setup
 bun run dev
 ```
 
 Run `bun run dev:client` separately for Vite hot reload. Production serves the built client and API
-from one Bun process behind Caddy.
+from one Bun process behind Caddy. Local development uses a disposable Docker PostgreSQL service
+bound only to `127.0.0.1:5432`; `bun run dev:setup` starts it and applies migrations.
 
 To use the private Docker rehearsal API while developing the client:
 

@@ -73,7 +73,8 @@ or the unchanged Python client. The legacy Django suite is evidence only.
 
 ## Public kit and unchanged client — 8
 
-56. Public GET/HEAD allowlist rejects unknown names, version mismatch, nesting, and traversal.
+56. Public GET/HEAD allowlist rejects unknown names, version mismatch, and nesting; normalized
+    traversal cannot escape the public allowlist (an alias of an already-public file is harmless).
 57. Origin substitution leaves no placeholder and never mutates vendored source files.
 58. Manifest fields, digests, lines, first/last line, runtime, and archive URL are exact.
 59. ZIP ordering, timestamps, modes, compression, and bytes are deterministic.

@@ -1,0 +1,22 @@
+name: homing-ts-dev
+
+services:
+  db:
+    image: postgres:17.5-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: homing
+      POSTGRES_USER: homing
+      POSTGRES_PASSWORD: homing
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U homing -d homing"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+volumes:
+  postgres_dev_data:

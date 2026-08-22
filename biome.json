@@ -6,7 +6,15 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["**", "!agentkit/package", "!dist", "!drizzle/meta", "!node_modules"]
+    "includes": [
+      "**",
+      "!agentkit/package",
+      "!dist",
+      "!docs/openapi.json",
+      "!docs/route-inventory.json",
+      "!drizzle/meta",
+      "!node_modules"
+    ]
   },
   "formatter": {
     "enabled": true,

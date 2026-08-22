@@ -52,6 +52,14 @@ export async function api<T>(
   path: string,
   init: RequestInit & { mutation?: boolean } = {},
 ): Promise<T> {
+  const result = await apiResponse<T>(path, init);
+  return result.data;
+}
+
+export async function apiResponse<T>(
+  path: string,
+  init: RequestInit & { mutation?: boolean } = {},
+): Promise<{ data: T; headers: Headers }> {
   const { mutation = false, ...requestInit } = init;
   if (mutation && !csrfToken) await acquireCsrf();
   const headers = new Headers(requestInit.headers);
@@ -67,8 +75,14 @@ export async function api<T>(
     credentials: "same-origin",
   });
   const body = await readBody(response);
-  if (!response.ok) throw new ApiError(response.status, (body ?? {}) as ApiErrorBody);
-  return body as T;
+  if (!response.ok) {
+    if (response.status === 401 && path !== "/me" && typeof window !== "undefined") {
+      clearCsrf();
+      window.dispatchEvent(new CustomEvent("homing:session-expired"));
+    }
+    throw new ApiError(response.status, (body ?? {}) as ApiErrorBody);
+  }
+  return { data: body as T, headers: response.headers };
 }
 
 export async function login(email: string, password: string) {
@@ -78,6 +92,23 @@ export async function login(email: string, password: string) {
     mutation: true,
     body: JSON.stringify({ email, password }),
   });
+  csrfToken = result.csrf_token;
+  return result;
+}
+
+export async function registerInvitation(
+  token: string,
+  input: { email: string; display_name: string; password: string },
+) {
+  await acquireCsrf();
+  const result = await api<{ csrf_token: string; project_id: string; user: User }>(
+    `/invitations/${encodeURIComponent(token)}/register`,
+    {
+      method: "POST",
+      mutation: true,
+      body: JSON.stringify(input),
+    },
+  );
   csrfToken = result.csrf_token;
   return result;
 }
@@ -123,13 +154,45 @@ export type Lead = {
   status: "active" | "trashed";
   revision: number;
   interested?: boolean;
+  is_interested?: boolean;
   interest_count?: number;
+  comment_count?: number;
   updated_at: string;
 };
 export type Comment = {
-  id: number;
-  author_id: number;
+  id: number | string;
+  author_id: number | string;
+  author_display_name?: string;
   body: string;
   created_at: string;
   edited_at: string | null;
+};
+
+export type Member = {
+  user_id: number | string;
+  display_name: string;
+  email: string;
+  role: "owner" | "editor" | "viewer";
+  is_current_user?: boolean;
+};
+
+export type AgentToken = {
+  id: string;
+  name: string;
+  prefix: string;
+  scopes: string[];
+  project_ids: string[];
+  expires_at: string;
+  revoked_at: string | null;
+};
+
+export type SourcePlanReview = {
+  id: string;
+  project_id: string;
+  status: "open" | "resolved";
+  observed_prompt_revision: number;
+  resolved_prompt_revision: number | null;
+  opened_at: string;
+  last_reported_at: string;
+  resolved_at: string | null;
 };

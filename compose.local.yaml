@@ -1,0 +1,7 @@
+services:
+  web:
+    ports:
+      - "127.0.0.1:8081:8000"
+
+  caddy:
+    profiles: [local-caddy]
