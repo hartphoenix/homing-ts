@@ -173,6 +173,12 @@ describe("collaboration routes", () => {
     expect(selfRemoval.status).toBe(409);
     expect(await selfRemoval.json()).toMatchObject({ error: { code: "self_removal" } });
 
+    const bodySelfRemoval = await app.request(
+      jsonRequest("DELETE", `/projects/${projectId}/members`, { user_id: 1 }),
+    );
+    expect(bodySelfRemoval.status).toBe(409);
+    expect(await bodySelfRemoval.json()).toMatchObject({ error: { code: "self_removal" } });
+
     setPrincipal({ userId: 2, email: "person2@example.test", authKind: "session" });
     const forbidden = await app.request(
       jsonRequest("PATCH", `/projects/${projectId}/members/1`, { role: "editor" }),

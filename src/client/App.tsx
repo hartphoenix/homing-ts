@@ -6,6 +6,7 @@ import {
   NavLink,
   Route,
   Routes,
+  useLocation,
   useNavigate,
   useParams,
   useSearchParams,
@@ -36,11 +37,94 @@ type AgentTokenSummary = {
   scopes?: string[];
 };
 
+const backgroundOptions = [
+  {
+    id: "interior-staircase",
+    label: "Staircase",
+    src: "/backgrounds/interior-staircase.jpg",
+  },
+  {
+    id: "interior-brownstone",
+    label: "Brownstone interior",
+    src: "/backgrounds/interior-brownstone.jpg",
+  },
+  {
+    id: "exterior-golden-stoop",
+    label: "Golden stoop",
+    src: "/backgrounds/exterior-golden-stoop.jpg",
+  },
+  {
+    id: "exterior-leafy-block",
+    label: "Leafy block",
+    src: "/backgrounds/exterior-leafy-block.jpg",
+  },
+] as const;
+
+type BackgroundId = (typeof backgroundOptions)[number]["id"];
+
+function storedBackground(): BackgroundId | null {
+  const stored = window.localStorage.getItem("homing-background");
+  return backgroundOptions.some(({ id }) => id === stored) ? (stored as BackgroundId) : null;
+}
+
+function BackgroundPicker({ defaultBackground }: { defaultBackground: BackgroundId }) {
+  const [selected, setSelected] = useState<BackgroundId | null>(storedBackground);
+  const active = selected ?? defaultBackground;
+
+  useEffect(() => {
+    const option = backgroundOptions.find(({ id }) => id === active);
+    if (!option) return;
+    document.documentElement.style.setProperty("--site-background-image", `url("${option.src}")`);
+    document.documentElement.dataset.background = option.id;
+  }, [active]);
+
+  if (!import.meta.env.DEV) return null;
+
+  return (
+    <fieldset className="background-picker">
+      <legend>Background</legend>
+      {backgroundOptions.map((option) => (
+        <label key={option.id} title={option.label}>
+          <input
+            checked={active === option.id}
+            name="site-background"
+            onChange={() => {
+              setSelected(option.id);
+              window.localStorage.setItem("homing-background", option.id);
+            }}
+            type="radio"
+          />
+          <span
+            aria-hidden="true"
+            className="background-picker-swatch"
+            style={{ backgroundImage: `url("${option.src}")` }}
+          />
+          <span className="sr-only">{option.label}</span>
+        </label>
+      ))}
+    </fieldset>
+  );
+}
+
 function TokenDate({ value, empty }: { value: string | null | undefined; empty: string }) {
   if (!value) return <>{empty}</>;
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return <>{empty}</>;
   return <time dateTime={value}>{date.toLocaleString()}</time>;
+}
+
+function daysOnMarket(listedAt: string | null | undefined): string {
+  if (!listedAt) return "Unknown";
+  const listed = new Date(`${listedAt}T00:00:00Z`);
+  if (Number.isNaN(listed.getTime())) return "Unknown";
+  const today = new Date();
+  const todayUtc = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate());
+  const days = Math.max(0, Math.floor((todayUtc - listed.getTime()) / 86_400_000));
+  return `${days} ${days === 1 ? "day" : "days"}`;
+}
+
+function listPrice(price: string): string {
+  return price.replace(/\s*\/\s*(?:month|mo\.?)\s*$/i, "");
 }
 
 function Message({ error }: { error: unknown }) {
@@ -110,7 +194,6 @@ function LoginPage() {
         <button className="button primary" disabled={mutation.isPending} type="submit">
           {mutation.isPending ? "Signing in…" : "Sign in"}
         </button>
-        <p className="quiet small">Access is invitation-only.</p>
       </form>
     </main>
   );
@@ -156,6 +239,7 @@ function Dashboard() {
   const queryClient = useQueryClient();
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
   const [prompt, setPrompt] = useState("");
   const projects = useQuery({
     queryKey: ["projects"],
@@ -166,10 +250,11 @@ function Dashboard() {
       api<Project>("/projects", {
         method: "POST",
         mutation: true,
-        body: JSON.stringify({ name, prompt, criteria: {} }),
+        body: JSON.stringify({ name, description, prompt, criteria: {} }),
       }),
     onSuccess: async () => {
       setName("");
+      setDescription("");
       setPrompt("");
       setCreating(false);
       await queryClient.invalidateQueries({ queryKey: ["projects"] });
@@ -183,18 +268,7 @@ function Dashboard() {
       <Message error={projects.error} />
       <section className="project-grid" aria-live="polite">
         {projects.data?.items.map((project) => (
-          <Link className="project-card" key={project.id} to={`/projects/${project.id}`}>
-            <div>
-              <span className="status-dot" />
-              <span className="quiet small">{project.role ?? "Member"}</span>
-            </div>
-            <h2>{project.name}</h2>
-            <p>{project.description || "No description yet."}</p>
-            <footer>
-              <span>Brief v{project.prompt_revision}</span>
-              <span>Open search →</span>
-            </footer>
-          </Link>
+          <ProjectCard key={project.id} project={project} />
         ))}
         {projects.data?.items.length === 0 && (
           <div className="empty">
@@ -219,6 +293,16 @@ function Dashboard() {
               maxLength={200}
               required
               placeholder="September housing"
+            />
+          </label>
+          <label>
+            Description
+            <textarea
+              value={description}
+              onChange={(event) => setDescription(event.target.value)}
+              maxLength={10000}
+              rows={3}
+              placeholder="A short summary shown on the search card"
             />
           </label>
           <label>
@@ -249,17 +333,46 @@ function Dashboard() {
   );
 }
 
+function ProjectCard({ project }: { project: Project }) {
+  const count = useQuery({
+    queryKey: ["dashboard-lead-count", project.id],
+    queryFn: () => api<{ total: number }>(`/projects/${project.id}/leads?limit=1`),
+  });
+  return (
+    <Link className="project-card" to={`/projects/${project.id}`}>
+      <div>
+        <span className="status-dot" />
+        <span className="quiet small">{project.role ?? "Member"}</span>
+      </div>
+      <h2>{project.name}</h2>
+      <p>{project.description || "No description yet."}</p>
+      <footer>
+        <span>
+          {count.data
+            ? `${count.data.total} ${count.data.total === 1 ? "lead" : "leads"}`
+            : "Leads"}
+        </span>
+        <span>Open search →</span>
+      </footer>
+    </Link>
+  );
+}
+
 function LeadIndex({ projectId }: { projectId: string }) {
+  const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
+  const [selected, setSelected] = useState<string[]>([]);
   const query = searchParams.get("q") ?? "";
   const status = searchParams.get("status") === "trash" ? "trash" : "active";
+  const view = searchParams.get("view") === "list" ? "list" : "cards";
+  const sort = searchParams.get("sort") ?? "updated";
   const leads = useQuery({
     queryKey: ["leads", projectId, query, status, searchParams.get("sort")],
     queryFn: () => {
       const params = new URLSearchParams({
         q: query,
         status,
-        sort: searchParams.get("sort") ?? "updated",
+        sort,
         limit: "50",
       });
       const path =
@@ -269,16 +382,48 @@ function LeadIndex({ projectId }: { projectId: string }) {
       return api<{ items: Lead[]; total: number; next_cursor?: string | null }>(path);
     },
   });
+  const batch = useMutation({
+    mutationFn: (action: "trash" | "restore" | "interested" | "uninterested") =>
+      api(`/projects/${projectId}/leads/batch`, {
+        method: "POST",
+        mutation: true,
+        body: JSON.stringify({ lead_ids: selected, action }),
+      }),
+    onSuccess: async () => {
+      setSelected([]);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["leads", projectId] }),
+        queryClient.invalidateQueries({ queryKey: ["lead-count", projectId] }),
+        queryClient.invalidateQueries({ queryKey: ["dashboard-lead-count", projectId] }),
+      ]);
+    },
+  });
+  const toggleSelected = (leadId: string) =>
+    setSelected((current) =>
+      current.includes(leadId) ? current.filter((id) => id !== leadId) : [...current, leadId],
+    );
+  const setSort = (column: "price" | "source" | "days") => {
+    const next = new URLSearchParams(searchParams);
+    const current = searchParams.get("sort") ?? "";
+    next.set("sort", current === `${column}_asc` ? `${column}_desc` : `${column}_asc`);
+    setSearchParams(next);
+  };
+  const sortDirection = (column: "price" | "source" | "days") =>
+    sort === `${column}_asc` ? "ascending" : sort === `${column}_desc` ? "descending" : "none";
+  const allVisibleSelected = Boolean(
+    leads.data?.items.length && leads.data.items.every((lead) => selected.includes(lead.id)),
+  );
   return (
     <>
       <div className="lead-tools">
         <input
           aria-label="Search leads"
-          placeholder="Search title or location"
+          placeholder="Search title, location, or description"
           value={query}
           onChange={(event) => {
             const next = new URLSearchParams(searchParams);
             event.target.value ? next.set("q", event.target.value) : next.delete("q");
+            setSelected([]);
             setSearchParams(next, { replace: true });
           }}
         />
@@ -288,6 +433,7 @@ function LeadIndex({ projectId }: { projectId: string }) {
           onChange={(event) => {
             const next = new URLSearchParams(searchParams);
             event.target.value === "trash" ? next.set("status", "trash") : next.delete("status");
+            setSelected([]);
             setSearchParams(next);
           }}
         >
@@ -295,45 +441,166 @@ function LeadIndex({ projectId }: { projectId: string }) {
           <option value="trash">Trash</option>
         </select>
       </div>
+      {selected.length > 0 && (
+        <div className="batch-bar" aria-label="Batch actions" role="toolbar">
+          <strong>{selected.length} selected</strong>
+          {status === "active" ? (
+            <>
+              <button
+                className="plain-button"
+                onClick={() => batch.mutate("interested")}
+                type="button"
+              >
+                Interested
+              </button>
+              <button
+                className="plain-button"
+                onClick={() => batch.mutate("uninterested")}
+                type="button"
+              >
+                Not interested
+              </button>
+              <button className="plain-button" onClick={() => batch.mutate("trash")} type="button">
+                Move to trash
+              </button>
+            </>
+          ) : (
+            <button className="plain-button" onClick={() => batch.mutate("restore")} type="button">
+              Restore
+            </button>
+          )}
+        </div>
+      )}
       <Message error={leads.error} />
-      <section className="lead-list">
-        {leads.data?.items.map((lead) => (
-          <Link className="lead-card" key={lead.id} to={`/projects/${projectId}/leads/${lead.id}`}>
-            <div className="lead-card-top">
-              <span className="source">{lead.source}</span>
-              <span className="price">{lead.price_display || "Price unknown"}</span>
-            </div>
-            <h2>{lead.title}</h2>
-            <p>{[lead.location, lead.availability].filter(Boolean).join(" · ")}</p>
-            <p className="clamp">{lead.summary}</p>
-            <footer>
-              <span>
-                <span aria-hidden="true">
-                  {lead.interest_count ? `${lead.interest_count} ♥` : "♡"}
-                </span>
-                <span className="sr-only">{lead.interest_count ?? 0} interested</span>
-              </span>
-              {Boolean(lead.comment_count) && (
+      <Message error={batch.error} />
+      {view === "cards" ? (
+        <section className="lead-list" aria-label="Lead cards">
+          {leads.data?.items.map((lead) => (
+            <article className="lead-card" key={lead.id}>
+              <Link
+                className="lead-card-hit"
+                aria-label={lead.title}
+                to={`/projects/${projectId}/leads/${lead.id}`}
+              />
+              <div className="lead-card-top">
+                <span className="source">{lead.source}</span>
+                <div className="lead-card-pricing">
+                  <span className="price">{lead.price_display || "Price unknown"}</span>
+                  <span className="quiet small">{daysOnMarket(lead.listed_at)}</span>
+                </div>
+              </div>
+              <h2>{lead.title}</h2>
+              <p>{[lead.location, lead.availability].filter(Boolean).join(" · ")}</p>
+              <p className="clamp">{lead.summary}</p>
+              <footer>
                 <span>
-                  {lead.comment_count} {lead.comment_count === 1 ? "comment" : "comments"}
+                  <span aria-hidden="true">
+                    {lead.interest_count ? `${lead.interest_count} ♥` : "♡"}
+                  </span>
+                  <span className="sr-only">{lead.interest_count ?? 0} interested</span>
                 </span>
-              )}
-            </footer>
-          </Link>
-        ))}
-        {leads.data?.items.length === 0 && (
-          <div className="empty">
-            <h2>No leads here</h2>
-            <p>The shared search is ready for its next result.</p>
-          </div>
-        )}
-      </section>
+                {Boolean(lead.comment_count) && (
+                  <span>
+                    {lead.comment_count} {lead.comment_count === 1 ? "comment" : "comments"}
+                  </span>
+                )}
+                <label className="lead-select">
+                  <span className="sr-only">Select {lead.title}</span>
+                  <input
+                    checked={selected.includes(lead.id)}
+                    onChange={() => toggleSelected(lead.id)}
+                    type="checkbox"
+                  />
+                </label>
+              </footer>
+            </article>
+          ))}
+          {leads.data?.items.length === 0 && (
+            <div className="empty">
+              <h2>No leads here</h2>
+              <p>The shared search is ready for its next result.</p>
+            </div>
+          )}
+        </section>
+      ) : (
+        <div className="lead-table-wrap">
+          <table className="lead-table">
+            <thead>
+              <tr>
+                <th className="check-column">
+                  <input
+                    aria-label="Select all visible leads"
+                    checked={allVisibleSelected}
+                    onChange={() =>
+                      setSelected(
+                        allVisibleSelected ? [] : (leads.data?.items.map((lead) => lead.id) ?? []),
+                      )
+                    }
+                    type="checkbox"
+                  />
+                </th>
+                <th>Listing</th>
+                <th aria-sort={sortDirection("price")}>
+                  <button onClick={() => setSort("price")} type="button">
+                    Price
+                  </button>
+                </th>
+                <th aria-sort={sortDirection("source")}>
+                  <button onClick={() => setSort("source")} type="button">
+                    Source
+                  </button>
+                </th>
+                <th aria-sort={sortDirection("days")}>
+                  <button onClick={() => setSort("days")} type="button">
+                    Days on market
+                  </button>
+                </th>
+                <th>Interest</th>
+                <th>Comments</th>
+              </tr>
+            </thead>
+            <tbody>
+              {leads.data?.items.map((lead) => (
+                <tr key={lead.id}>
+                  <td>
+                    <input
+                      aria-label={`Select ${lead.title}`}
+                      checked={selected.includes(lead.id)}
+                      onChange={() => toggleSelected(lead.id)}
+                      type="checkbox"
+                    />
+                  </td>
+                  <td>
+                    <Link to={`/projects/${projectId}/leads/${lead.id}`}>
+                      <strong>{lead.title}</strong>
+                      <span className="lead-location">{lead.location || "Location unknown"}</span>
+                    </Link>
+                  </td>
+                  <td>{lead.price_display ? listPrice(lead.price_display) : "Unknown"}</td>
+                  <td>{lead.source}</td>
+                  <td>{daysOnMarket(lead.listed_at)}</td>
+                  <td>{lead.interest_count ? `${lead.interest_count} ♥` : "♡"}</td>
+                  <td>{lead.comment_count || ""}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {leads.data?.items.length === 0 && (
+            <div className="empty">
+              <h2>No leads here</h2>
+              <p>The shared search is ready for its next result.</p>
+            </div>
+          )}
+        </div>
+      )}
     </>
   );
 }
 
-function ProjectPage() {
+function ProjectPage({ currentUserId }: { currentUserId: number }) {
   const { projectId = "" } = useParams();
+  const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
   const project = useQuery({
     queryKey: ["project", projectId],
     queryFn: () => api<Project>(`/projects/${projectId}`),
@@ -346,27 +613,54 @@ function ProjectPage() {
   return (
     <main className="page project-page">
       <header className="page-heading">
-        <Link className="back" to="/">
-          ← Searches
-        </Link>
         <h1>{project.data?.name}</h1>
       </header>
-      <nav className="tabs" aria-label="Project">
-        <NavLink end to={`/projects/${projectId}`}>
-          Leads{activeLeadCount.data?.total ? ` (${activeLeadCount.data.total})` : ""}
-        </NavLink>
-        <NavLink to={`/projects/${projectId}/brief`}>Brief</NavLink>
-        <NavLink to={`/projects/${projectId}/members`}>People</NavLink>
-      </nav>
+      <div className="project-tabs-row">
+        <nav className="tabs" aria-label="Project">
+          <NavLink end to={`/projects/${projectId}`}>
+            Leads{activeLeadCount.data?.total ? ` (${activeLeadCount.data.total})` : ""}
+          </NavLink>
+          <NavLink to={`/projects/${projectId}/brief`}>Brief</NavLink>
+          <NavLink to={`/projects/${projectId}/members`}>People</NavLink>
+        </nav>
+        {location.pathname.replace(/\/$/, "") === `/projects/${projectId}` && (
+          <fieldset className="view-toggle">
+            <legend className="sr-only">View mode</legend>
+            {(["cards", "list"] as const).map((mode) => (
+              <button
+                className={(searchParams.get("view") ?? "cards") === mode ? "active" : ""}
+                key={mode}
+                onClick={() => {
+                  const next = new URLSearchParams(searchParams);
+                  mode === "list" ? next.set("view", "list") : next.delete("view");
+                  setSearchParams(next);
+                }}
+                type="button"
+              >
+                {mode === "cards" ? "Cards" : "List"}
+              </button>
+            ))}
+          </fieldset>
+        )}
+      </div>
       <Routes>
-        <Route index element={<LeadIndex projectId={projectId} />} />
+        <Route
+          index
+          element={<LeadIndex key={searchParams.get("view") ?? "cards"} projectId={projectId} />}
+        />
         <Route
           path="brief"
           element={project.data ? <BriefEditor project={project.data} /> : null}
         />
         <Route
           path="members"
-          element={<Members canManage={project.data?.role === "owner"} projectId={projectId} />}
+          element={
+            <Members
+              canManage={project.data?.role === "owner"}
+              currentUserId={currentUserId}
+              projectId={projectId}
+            />
+          }
         />
       </Routes>
     </main>
@@ -375,10 +669,26 @@ function ProjectPage() {
 
 function BriefEditor({ project }: { project: Project }) {
   const queryClient = useQueryClient();
+  const [description, setDescription] = useState(project.description);
   const [prompt, setPrompt] = useState(project.prompt ?? project.current_prompt ?? "");
   useEffect(() => {
+    setDescription(project.description);
     setPrompt(project.prompt ?? project.current_prompt ?? "");
   }, [project]);
+  const descriptionMutation = useMutation({
+    mutationFn: () =>
+      api<Project>(`/projects/${project.id}`, {
+        method: "PATCH",
+        mutation: true,
+        body: JSON.stringify({ description }),
+      }),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["project", project.id] }),
+        queryClient.invalidateQueries({ queryKey: ["projects"] }),
+      ]);
+    },
+  });
   const mutation = useMutation({
     mutationFn: () =>
       api(`/projects/${project.id}/prompt`, {
@@ -393,36 +703,60 @@ function BriefEditor({ project }: { project: Project }) {
     onSuccess: async () => queryClient.invalidateQueries({ queryKey: ["project", project.id] }),
   });
   return (
-    <form
-      className="panel editor"
-      onSubmit={(event) => {
-        event.preventDefault();
-        mutation.mutate();
-      }}
-    >
-      <div>
-        <h2>What should the search find?</h2>
-      </div>
-      <label>
-        Instructions
-        <textarea
-          rows={14}
-          maxLength={30000}
-          value={prompt}
-          onChange={(event) => setPrompt(event.target.value)}
-        />
-      </label>
-      <Message error={mutation.error} />
-      {mutation.error instanceof ApiError && mutation.error.status === 409 && (
-        <p className="message">
-          Your draft is still here. Reload the current brief in another tab before deciding what to
-          keep.
-        </p>
-      )}
-      <button className="button primary" disabled={mutation.isPending} type="submit">
-        Save new revision
-      </button>
-    </form>
+    <div className="brief-stack">
+      <form
+        className="panel editor"
+        onSubmit={(event) => {
+          event.preventDefault();
+          descriptionMutation.mutate();
+        }}
+      >
+        <h2>Search description</h2>
+        <label>
+          Description shown on the search card
+          <textarea
+            maxLength={20000}
+            onChange={(event) => setDescription(event.target.value)}
+            rows={3}
+            value={description}
+          />
+        </label>
+        <Message error={descriptionMutation.error} />
+        <button className="button" disabled={descriptionMutation.isPending} type="submit">
+          Save description
+        </button>
+      </form>
+      <form
+        className="panel editor"
+        onSubmit={(event) => {
+          event.preventDefault();
+          mutation.mutate();
+        }}
+      >
+        <div>
+          <h2>What should the search find?</h2>
+        </div>
+        <label>
+          Instructions
+          <textarea
+            rows={14}
+            maxLength={30000}
+            value={prompt}
+            onChange={(event) => setPrompt(event.target.value)}
+          />
+        </label>
+        <Message error={mutation.error} />
+        {mutation.error instanceof ApiError && mutation.error.status === 409 && (
+          <p className="message">
+            Your draft is still here. Reload the current brief in another tab before deciding what
+            to keep.
+          </p>
+        )}
+        <button className="button" disabled={mutation.isPending} type="submit">
+          Save new revision
+        </button>
+      </form>
+    </div>
   );
 }
 
@@ -446,7 +780,15 @@ type MembersData = {
   pending_invitations?: PendingInvitation[];
 };
 
-function Members({ projectId, canManage }: { projectId: string; canManage: boolean }) {
+function Members({
+  projectId,
+  canManage,
+  currentUserId,
+}: {
+  projectId: string;
+  canManage: boolean;
+  currentUserId: number;
+}) {
   const queryClient = useQueryClient();
   const [isInviting, setIsInviting] = useState(false);
   const [email, setEmail] = useState("");
@@ -526,7 +868,7 @@ function Members({ projectId, canManage }: { projectId: string; canManage: boole
               <p className="quiet small">{member.email}</p>
             </div>
             <span className="pill">{member.role}</span>
-            {canManage && (
+            {canManage && member.user_id !== currentUserId && (
               <button
                 className="button member-remove"
                 disabled={removeMember.isPending}
@@ -603,6 +945,7 @@ function LeadPage() {
   const [isEditing, setIsEditing] = useState(false);
   const [draftTitle, setDraftTitle] = useState("");
   const [draftPrice, setDraftPrice] = useState("");
+  const [draftListedAt, setDraftListedAt] = useState("");
   const [draftSummary, setDraftSummary] = useState("");
   const project = useQuery({
     queryKey: ["project", projectId],
@@ -616,6 +959,7 @@ function LeadPage() {
     if (!lead.data || isEditing) return;
     setDraftTitle(lead.data.title);
     setDraftPrice(lead.data.price_display);
+    setDraftListedAt(lead.data.listed_at ?? "");
     setDraftSummary(lead.data.summary);
   }, [lead.data, isEditing]);
   const comments = useQuery({
@@ -644,6 +988,7 @@ function LeadPage() {
         body: JSON.stringify({
           title: draftTitle.trim(),
           price_display: draftPrice.trim(),
+          listed_at: draftListedAt || null,
           summary: draftSummary,
           expected_revision: lead.data.revision,
         }),
@@ -707,18 +1052,36 @@ function LeadPage() {
             ) : (
               <h1>{lead.data.title}</h1>
             )}
-            {isEditing ? (
-              <input
-                aria-label="Price"
-                className="detail-price detail-price-input"
-                maxLength={200}
-                onChange={(event) => setDraftPrice(event.target.value)}
-                placeholder="Price unknown"
-                value={draftPrice}
-              />
-            ) : (
-              <strong className="detail-price">{lead.data.price_display || "Price unknown"}</strong>
-            )}
+            <div className="detail-market-data">
+              {isEditing ? (
+                <>
+                  <input
+                    aria-label="Price"
+                    className="detail-price detail-price-input"
+                    maxLength={200}
+                    onChange={(event) => setDraftPrice(event.target.value)}
+                    placeholder="Price unknown"
+                    value={draftPrice}
+                  />
+                  <label className="listed-date-field">
+                    Date listed
+                    <input
+                      aria-label="Date listed"
+                      onChange={(event) => setDraftListedAt(event.target.value)}
+                      type="date"
+                      value={draftListedAt}
+                    />
+                  </label>
+                </>
+              ) : (
+                <>
+                  <strong className="detail-price">
+                    {lead.data.price_display || "Price unknown"}
+                  </strong>
+                  <span className="detail-days">{daysOnMarket(lead.data.listed_at)} on market</span>
+                </>
+              )}
+            </div>
             <a className="button primary" href={lead.data.url} target="_blank" rel="noreferrer">
               Open listing ↗
             </a>
@@ -1271,7 +1634,7 @@ function AuthenticatedApp({ me }: { me: Me }) {
       <Routes>
         <Route path="/" element={<Dashboard />} />
         <Route path="/projects/:projectId/leads/:leadId" element={<LeadPage />} />
-        <Route path="/projects/:projectId/*" element={<ProjectPage />} />
+        <Route path="/projects/:projectId/*" element={<ProjectPage currentUserId={me.user.id} />} />
         <Route path="/agent-setup" element={<AgentSetupPage />} />
         <Route path="/settings" element={<SettingsPage me={me} />} />
         <Route path="*" element={<Navigate to="/" replace />} />
@@ -1282,10 +1645,15 @@ function AuthenticatedApp({ me }: { me: Me }) {
 
 export function App() {
   const me = useQuery({ queryKey: ["me"], queryFn: () => api<Me>("/me"), retry: false });
-  if (me.isLoading) return <Loading />;
-  if (me.error instanceof ApiError && me.error.status === 401) return <LoginPage />;
-  if (me.error)
-    return (
+  let content: ReactNode;
+  let defaultBackground: BackgroundId = "interior-brownstone";
+
+  if (me.isLoading) content = <Loading />;
+  else if (me.error instanceof ApiError && me.error.status === 401) {
+    content = <LoginPage />;
+    defaultBackground = "exterior-leafy-block";
+  } else if (me.error) {
+    content = (
       <main className="center">
         <div className="panel">
           <h1>Homing is unavailable</h1>
@@ -1296,5 +1664,12 @@ export function App() {
         </div>
       </main>
     );
-  return me.data ? <AuthenticatedApp me={me.data} /> : <Loading />;
+  } else content = me.data ? <AuthenticatedApp me={me.data} /> : <Loading />;
+
+  return (
+    <>
+      {content}
+      <BackgroundPicker defaultBackground={defaultBackground} />
+    </>
+  );
 }

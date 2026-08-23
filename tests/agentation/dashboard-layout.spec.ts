@@ -36,6 +36,12 @@ test("places the new-search action beneath the project list", async ({ page }) =
       }),
     });
   });
+  await page.route("**/api/v1/projects/*/leads?**", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ items: [], total: 8 }),
+    });
+  });
 
   await page.goto("/");
 
@@ -50,5 +56,5 @@ test("places the new-search action beneath the project list", async ({ page }) =
 
   expect(button.x).toBeCloseTo(main.x + 4, 0);
   expect(button.y).toBeCloseTo(grid.y + grid.height + 24, 0);
-  expect(button.y).toBeCloseTo(645, 0);
+  await expect(page.getByText("8 leads")).toBeVisible();
 });

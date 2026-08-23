@@ -102,7 +102,10 @@ test("invites, renders pending rows, and gives owners removal controls", async (
   const pendingRow = page.locator(".member-row").filter({ hasText: "new-member@example.test" });
   await expect(pendingRow).toContainText("Pending");
   await expect(page.getByRole("button", { name: "Invite" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Remove" })).toHaveCount(3);
+  await expect(page.getByRole("button", { name: "Remove" })).toHaveCount(2);
+  await expect(
+    page.locator(".member-row").filter({ hasText: "hart@example.test" }).getByRole("button"),
+  ).toHaveCount(0);
 
   await pendingRow.getByRole("button", { name: "Remove" }).click();
   await expect(pendingRow).toHaveCount(0);

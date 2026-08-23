@@ -600,6 +600,7 @@ LEAD_FIELDS = {
     "availability": ("str", 200),
     "housing_type": ("str", 100),
     "date_confidence": ("enum", ("strong", "verify", "unknown")),
+    "listed_at": ("date", None),
     "parks": ("str", 1000),
     "attributes": ("obj", 40),
     "verification_notes": ("str", 5000),
@@ -684,6 +685,12 @@ def validate_lead(item):
                 problems.append("%s dropped" % name)
                 continue
             clean[name] = str(value)
+        elif kind == "date":
+            text = str(value)
+            if not re.match(r"^\d{4}-\d{2}-\d{2}$", text):
+                problems.append("%s dropped" % name)
+                continue
+            clean[name] = text
     for name in LEAD_REQUIRED:
         if not clean.get(name):
             return None, problems + ["missing required field %s" % name]

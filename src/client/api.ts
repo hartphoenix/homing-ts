@@ -153,6 +153,7 @@ export type Lead = {
   availability: string;
   housing_type: string;
   date_confidence: string;
+  listed_at?: string | null;
   status: "active" | "trashed";
   revision: number;
   interested?: boolean;

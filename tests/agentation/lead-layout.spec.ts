@@ -94,16 +94,20 @@ test("places price and conversation in the lead content column", async ({ page }
   )
     return;
 
-  expect(detailHeading.width / main.width).toBeCloseTo(0.68, 2);
-  expect(heading.width).toBeCloseTo(detailHeading.width, 0);
-  expect(heading.y - (back.y + back.height)).toBeLessThanOrEqual(32);
-  expect(price.x).toBeCloseTo(main.x, 0);
+  expect(detailHeading.width).toBeCloseTo(main.width, 0);
+  expect(heading.x).toBeGreaterThan(detailHeading.x);
+  expect(heading.x + heading.width).toBeLessThan(detailHeading.x + detailHeading.width);
+  expect(detailHeading.y - (back.y + back.height)).toBeLessThanOrEqual(32);
+  expect(price.x).toBeGreaterThan(detailHeading.x);
   expect(price.y - (heading.y + heading.height)).toBeGreaterThanOrEqual(0);
   expect(price.y - (heading.y + heading.height)).toBeLessThanOrEqual(16);
   expect(listingLink.y + listingLink.height).toBeCloseTo(price.y + price.height, 0);
-  expect(listingLink.x + listingLink.width).toBeCloseTo(detailHeading.x + detailHeading.width, 0);
-  expect(article.y - (price.y + price.height)).toBeLessThanOrEqual(24);
+  expect(detailHeading.x + detailHeading.width - (listingLink.x + listingLink.width)).toBeCloseTo(
+    17,
+    0,
+  );
+  expect(article.y - (detailHeading.y + detailHeading.height)).toBeLessThanOrEqual(24);
   expect(conversation.x).toBeCloseTo(main.x, 0);
-  expect(conversation.width / main.width).toBeCloseTo(0.68, 2);
+  expect(conversation.width).toBeCloseTo(main.width, 0);
   expect(conversation.y).toBeGreaterThan(article.y + article.height);
 });
