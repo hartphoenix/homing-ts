@@ -1,0 +1,552 @@
+[
+  {
+    "method": "get",
+    "path": "/health/live",
+    "classification": "public",
+    "auth": "public"
+  },
+  {
+    "method": "get",
+    "path": "/health/ready",
+    "classification": "public",
+    "auth": "public"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/csrf",
+    "classification": "browser-required",
+    "auth": "public"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/invitations/{token}/register",
+    "classification": "browser-required",
+    "auth": "public",
+    "body": true,
+    "status": 201
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/invitations/{token}/accept",
+    "classification": "browser-required",
+    "auth": "public"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/invitations/{token}/accept",
+    "classification": "browser-required",
+    "auth": "session"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/session",
+    "classification": "browser-required",
+    "auth": "public",
+    "body": true
+  },
+  {
+    "method": "delete",
+    "path": "/api/v1/session",
+    "classification": "browser-required",
+    "auth": "session",
+    "status": 204
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/me",
+    "classification": "browser-required",
+    "auth": "either"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/me/profile",
+    "classification": "browser-required",
+    "auth": "either"
+  },
+  {
+    "method": "patch",
+    "path": "/api/v1/me/profile",
+    "classification": "browser-required",
+    "auth": "session",
+    "body": true
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/me/token",
+    "classification": "agent-required",
+    "auth": "either"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/auth/tokens",
+    "classification": "browser-required",
+    "auth": "session"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/auth/tokens",
+    "classification": "browser-required",
+    "auth": "session",
+    "body": true,
+    "status": 201
+  },
+  {
+    "method": "delete",
+    "path": "/api/v1/auth/tokens/{id}",
+    "classification": "browser-required",
+    "auth": "session",
+    "status": 204
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/agent-link",
+    "classification": "agent-required",
+    "auth": "public",
+    "body": true,
+    "status": 201
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/agent-link/token",
+    "classification": "agent-required",
+    "auth": "public",
+    "body": true
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/auth/agent-links/{code}",
+    "classification": "browser-required",
+    "auth": "session"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/auth/agent-links/{code}",
+    "classification": "browser-required",
+    "auth": "session",
+    "body": true
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/me/projects",
+    "classification": "agent-required",
+    "auth": "either"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/projects",
+    "classification": "browser-required",
+    "auth": "session",
+    "body": true,
+    "status": 201
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/projects/{projectId}",
+    "classification": "agent-required",
+    "auth": "either"
+  },
+  {
+    "method": "patch",
+    "path": "/api/v1/projects/{projectId}",
+    "classification": "browser-required",
+    "auth": "session",
+    "body": true
+  },
+  {
+    "method": "delete",
+    "path": "/api/v1/projects/{projectId}",
+    "classification": "browser-required",
+    "auth": "session"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/projects/{projectId}/restore",
+    "classification": "browser-required",
+    "auth": "session"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/projects/{projectId}/prompt",
+    "classification": "agent-required",
+    "auth": "either"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/projects/{projectId}/prompt/revisions",
+    "classification": "browser-required",
+    "auth": "either"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/projects/{projectId}/prompt-revisions",
+    "classification": "compatibility",
+    "auth": "either"
+  },
+  {
+    "method": "patch",
+    "path": "/api/v1/projects/{projectId}/prompt",
+    "classification": "browser-required",
+    "auth": "session",
+    "body": true
+  },
+  {
+    "method": "put",
+    "path": "/api/v1/projects/{projectId}/prompt",
+    "classification": "compatibility",
+    "auth": "session",
+    "body": true
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/projects/{projectId}/members",
+    "classification": "browser-required",
+    "auth": "session"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/projects/{projectId}/invitations",
+    "classification": "browser-required",
+    "auth": "session",
+    "body": true,
+    "status": 201
+  },
+  {
+    "method": "patch",
+    "path": "/api/v1/projects/{projectId}/members",
+    "classification": "compatibility",
+    "auth": "session",
+    "body": true
+  },
+  {
+    "method": "delete",
+    "path": "/api/v1/projects/{projectId}/members",
+    "classification": "compatibility",
+    "auth": "session",
+    "body": true,
+    "status": 204
+  },
+  {
+    "method": "patch",
+    "path": "/api/v1/projects/{projectId}/members/{userId}",
+    "classification": "browser-required",
+    "auth": "session",
+    "body": true
+  },
+  {
+    "method": "delete",
+    "path": "/api/v1/projects/{projectId}/members/{userId}",
+    "classification": "browser-required",
+    "auth": "session",
+    "status": 204
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/projects/{projectId}/leads",
+    "classification": "agent-required",
+    "auth": "either"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/projects/{projectId}/leads",
+    "classification": "agent-required",
+    "auth": "either",
+    "body": true,
+    "status": 201
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/projects/{projectId}/leads/interested",
+    "classification": "compatibility",
+    "auth": "either"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/projects/{projectId}/interested",
+    "classification": "compatibility",
+    "auth": "either"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/projects/{projectId}/leads/trash",
+    "classification": "compatibility",
+    "auth": "either"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/projects/{projectId}/trash",
+    "classification": "browser-required",
+    "auth": "either"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/projects/{projectId}/leads/bulk-upsert",
+    "classification": "agent-required",
+    "auth": "either",
+    "body": true
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/projects/{projectId}/leads/batch",
+    "classification": "compatibility",
+    "auth": "either",
+    "body": true
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/projects/{projectId}/leads/{leadId}",
+    "classification": "agent-required",
+    "auth": "either"
+  },
+  {
+    "method": "patch",
+    "path": "/api/v1/projects/{projectId}/leads/{leadId}",
+    "classification": "browser-required",
+    "auth": "either",
+    "body": true
+  },
+  {
+    "method": "delete",
+    "path": "/api/v1/projects/{projectId}/leads/{leadId}",
+    "classification": "browser-required",
+    "auth": "either"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/projects/{projectId}/leads/{leadId}/restore",
+    "classification": "compatibility",
+    "auth": "either"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/projects/{projectId}/trash/{leadId}/restore",
+    "classification": "browser-required",
+    "auth": "either"
+  },
+  {
+    "method": "delete",
+    "path": "/api/v1/projects/{projectId}/leads/{leadId}/permanent",
+    "classification": "compatibility",
+    "auth": "either",
+    "status": 204
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/projects/{projectId}/leads/{leadId}/interest",
+    "classification": "compatibility",
+    "auth": "either",
+    "body": true
+  },
+  {
+    "method": "put",
+    "path": "/api/v1/projects/{projectId}/leads/{leadId}/interest",
+    "classification": "browser-required",
+    "auth": "either",
+    "status": 204
+  },
+  {
+    "method": "delete",
+    "path": "/api/v1/projects/{projectId}/leads/{leadId}/interest",
+    "classification": "browser-required",
+    "auth": "either",
+    "status": 204
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/projects/{projectId}/leads/{leadId}/comments",
+    "classification": "browser-required",
+    "auth": "either"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/projects/{projectId}/leads/{leadId}/comments",
+    "classification": "agent-required",
+    "auth": "either",
+    "body": true,
+    "status": 201
+  },
+  {
+    "method": "patch",
+    "path": "/api/v1/projects/{projectId}/leads/{leadId}/comments/{commentId}",
+    "classification": "browser-required",
+    "auth": "either",
+    "body": true
+  },
+  {
+    "method": "delete",
+    "path": "/api/v1/projects/{projectId}/leads/{leadId}/comments/{commentId}",
+    "classification": "browser-required",
+    "auth": "either",
+    "status": 204
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/projects/{projectId}/search-runs",
+    "classification": "agent-required",
+    "auth": "either"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/projects/{projectId}/search-runs",
+    "classification": "agent-required",
+    "auth": "either",
+    "body": true,
+    "status": 201
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/projects/{projectId}/search-runs/{runId}",
+    "classification": "agent-required",
+    "auth": "either"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/projects/{projectId}/search-runs/{runId}/claim",
+    "classification": "agent-required",
+    "auth": "either"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/projects/{projectId}/search-runs/{runId}/heartbeat",
+    "classification": "agent-required",
+    "auth": "either",
+    "body": true
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/projects/{projectId}/search-runs/{runId}/complete",
+    "classification": "agent-required",
+    "auth": "either",
+    "body": true
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/projects/{projectId}/changes",
+    "classification": "agent-required",
+    "auth": "either"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/me/source-plan-reviews",
+    "classification": "agent-required",
+    "auth": "either"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/projects/{projectId}/source-plan-review",
+    "classification": "agent-required",
+    "auth": "either",
+    "body": true,
+    "status": 201
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/projects/{projectId}/source-plan-review/{reviewId}/resolve",
+    "classification": "agent-required",
+    "auth": "either",
+    "body": true
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/me/source-plan-repair",
+    "classification": "browser-required",
+    "auth": "either"
+  },
+  {
+    "method": "get",
+    "path": "/agent/",
+    "classification": "public",
+    "auth": "public"
+  },
+  {
+    "method": "head",
+    "path": "/agent/",
+    "classification": "public",
+    "auth": "public"
+  },
+  {
+    "method": "get",
+    "path": "/agent-setup/SKILL.md",
+    "classification": "compatibility",
+    "auth": "public",
+    "status": 301
+  },
+  {
+    "method": "head",
+    "path": "/agent-setup/SKILL.md",
+    "classification": "compatibility",
+    "auth": "public",
+    "status": 301
+  },
+  {
+    "method": "get",
+    "path": "/agent/pkg/VERSION",
+    "classification": "public",
+    "auth": "public"
+  },
+  {
+    "method": "head",
+    "path": "/agent/pkg/VERSION",
+    "classification": "public",
+    "auth": "public"
+  },
+  {
+    "method": "get",
+    "path": "/agent/pkg/SKILL.md",
+    "classification": "public",
+    "auth": "public"
+  },
+  {
+    "method": "head",
+    "path": "/agent/pkg/SKILL.md",
+    "classification": "public",
+    "auth": "public"
+  },
+  {
+    "method": "get",
+    "path": "/agent/pkg/manifest.json",
+    "classification": "public",
+    "auth": "public"
+  },
+  {
+    "method": "head",
+    "path": "/agent/pkg/manifest.json",
+    "classification": "public",
+    "auth": "public"
+  },
+  {
+    "method": "get",
+    "path": "/agent/pkg/{archive}",
+    "classification": "public",
+    "auth": "public"
+  },
+  {
+    "method": "head",
+    "path": "/agent/pkg/{archive}",
+    "classification": "public",
+    "auth": "public"
+  },
+  {
+    "method": "get",
+    "path": "/agent/pkg/references/{name}",
+    "classification": "public",
+    "auth": "public"
+  },
+  {
+    "method": "head",
+    "path": "/agent/pkg/references/{name}",
+    "classification": "public",
+    "auth": "public"
+  },
+  {
+    "method": "get",
+    "path": "/agent/pkg/scripts/{name}",
+    "classification": "public",
+    "auth": "public"
+  },
+  {
+    "method": "head",
+    "path": "/agent/pkg/scripts/{name}",
+    "classification": "public",
+    "auth": "public"
+  }
+]

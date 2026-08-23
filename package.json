@@ -4,23 +4,28 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "bun --watch src/server/index.ts",
+    "dev": "DATABASE_URL=postgresql://homing:homing@127.0.0.1:5432/homing PUBLIC_ORIGIN=http://localhost:5173 AUTH_THROTTLE_KEY=local-development-only-throttle-key HOMING_DEMO_ACCOUNTS=1 bun --watch src/server/index.ts",
     "dev:client": "vite",
+    "dev:db": "docker compose -f compose.dev.yaml up --detach --wait",
+    "dev:setup": "bun run dev:db && DATABASE_URL=postgresql://homing:homing@127.0.0.1:5432/homing PUBLIC_ORIGIN=http://localhost:5173 AUTH_THROTTLE_KEY=local-development-only-throttle-key bun run db:migrate",
     "build": "vite build",
+    "api:generate": "bun src/server/openapi.ts",
+    "api:check": "bun src/server/openapi.ts --check",
     "start": "bun src/server/index.ts",
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",
     "format:check": "biome format .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "playwright test",
+    "test:e2e": "bun run build && playwright test",
+    "test:agentation": "playwright test --config playwright.agentation.config.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "bun src/server/db/migrate.ts",
     "db:import-django": "bun src/server/db/import-django.ts",
     "db:reset-password": "bun src/server/db/reset-password.ts",
     "db:validate-import": "bun src/server/db/validate-import.ts",
     "db:maintenance": "bun src/server/db/maintenance.ts",
-    "check": "bun run typecheck && bun run lint && bun run test && bun run build"
+    "check": "bun run typecheck && bun run lint && bun run api:check && bun run test && bun run build"
   },
   "dependencies": {
     "@tanstack/react-query": "5.101.4",
@@ -40,9 +45,13 @@
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.4",
     "@vitejs/plugin-react": "6.1.0",
+    "agentation": "3.0.2",
     "drizzle-kit": "0.31.10",
     "typescript": "7.0.2",
     "vite": "8.2.2",
     "vitest": "4.1.11"
+  },
+  "patchedDependencies": {
+    "agentation@3.0.2": "patches/agentation@3.0.2.patch"
   }
 }

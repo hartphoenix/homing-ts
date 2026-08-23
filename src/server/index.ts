@@ -1,8 +1,30 @@
+import { createPostgresAgentServices } from "./agent/postgres-repository";
 import { createApp } from "./app";
+import { DrizzleAuthRepository } from "./auth/drizzle-repository";
+import { PostgresCollaborationRepository } from "./collaboration/postgres-repository";
 import { getConfig } from "./config";
+import { seedDemoAccounts } from "./db/seed-demo";
 
 const config = getConfig();
-const app = createApp();
+if (process.env.HOMING_DEMO_ACCOUNTS === "1") await seedDemoAccounts();
+
+const agentServices = createPostgresAgentServices();
+const app = createApp({
+  auth: {
+    repo: new DrizzleAuthRepository(),
+    origin: config.PUBLIC_ORIGIN,
+    sessionDays: config.SESSION_DAYS,
+    tokenDays: config.AGENT_TOKEN_DAYS,
+    throttleKey: config.AUTH_THROTTLE_KEY,
+  },
+  agent: {
+    runs: { service: agentServices.runs },
+    changes: { service: agentServices.changes },
+    sourcePlans: { service: agentServices.sourcePlans, origin: config.PUBLIC_ORIGIN },
+    kit: { origin: config.PUBLIC_ORIGIN },
+  },
+  collaboration: { repository: new PostgresCollaborationRepository() },
+});
 
 const server = Bun.serve({
   fetch: app.fetch,

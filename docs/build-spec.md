@@ -1,6 +1,6 @@
 # Homing replacement build specification
 
-Status: foundation in progress.
+Status: local functional candidate; private deployment and cutover rehearsal pending.
 
 ## Outcome
 
@@ -64,3 +64,19 @@ Tier 1. Performance profiling begins only after the functional release candidate
   insufficient scope return 403.
 - Prompt and lead updates are optimistic and return 409 without discarding the submitted draft.
 - Project change, audit, and mutation writes commit together.
+- Production accepts browser traffic only through Caddy. Caddy overwrites `X-Forwarded-For` with
+  its observed client address before forwarding to the unexposed application container.
+
+## Browser identity contract
+
+- `GET /api/v1/csrf` creates or refreshes the synchronizer token. Login, registration, profile
+  updates, invitation acceptance, token administration, and pairing decisions require that token
+  plus the exact configured Origin.
+- `POST /api/v1/invitations/:token/register` is the only registration path. It atomically creates
+  the invited user and profile, creates the project membership, and consumes the invitation.
+  Existing exact-email recipients instead sign in and use `POST /api/v1/invitations/:token/accept`.
+- `GET/PATCH /api/v1/me/profile` owns private search context and `agent_paused_until`.
+  `/api/v1/me/token` and `/api/v1/me/projects` surface that pause to scheduled agents immediately.
+- Device pairing begins and polls without credentials. A browser session inspects and decides the
+  six-character code through `/api/v1/auth/agent-links/:code`; the paired token is disclosed once
+  and never receives `leads:destroy`.

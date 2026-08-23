@@ -25,7 +25,7 @@ export class HomingError extends Error {
 }
 
 export function errorResponse(context: Context<{ Variables: AppVariables }>, error: HomingError) {
-  return context.json(
+  const response = context.json(
     {
       error: {
         code: error.code,
@@ -36,4 +36,7 @@ export function errorResponse(context: Context<{ Variables: AppVariables }>, err
     },
     error.status,
   );
+  const headers = (error as HomingError & { headers?: Record<string, string> }).headers;
+  for (const [name, value] of Object.entries(headers ?? {})) response.headers.set(name, value);
+  return response;
 }

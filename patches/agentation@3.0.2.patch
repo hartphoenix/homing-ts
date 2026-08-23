@@ -1,0 +1,13 @@
+diff --git a/dist/index.mjs b/dist/index.mjs
+index b6662bd6b8bcc9555e22a4d1a0de99198e0c11b5..01e291602b4ff9bc21145dec31a1720b9486de10 100644
+--- a/dist/index.mjs
++++ b/dist/index.mjs
+@@ -7047,7 +7047,7 @@ function getReactComponentName(element, config) {
+ }
+ 
+ // src/utils/source-location.ts
+-import React from "react";
++import * as React from "react";
+ var FIBER_TAGS = {
+   FunctionComponent: 0,
+   ClassComponent: 1,

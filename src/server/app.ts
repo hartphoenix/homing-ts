@@ -3,7 +3,16 @@ import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { requestId } from "hono/request-id";
 import { secureHeaders } from "hono/secure-headers";
-
+import { type AgentCoreRouterOptions, createAgentCoreRouter } from "./agent/router";
+import {
+  type AuthContext,
+  type AuthRouterDependencies,
+  assertSessionMutation,
+  createAuthRouter,
+  resolvePrincipal,
+} from "./auth/router";
+import { createCollaborationRouter } from "./collaboration/router";
+import type { CollaborationDependencies } from "./collaboration/types";
 import { getDatabase } from "./db/client";
 import { errorResponse, HomingError } from "./http";
 import { requestLogger } from "./logging";
@@ -11,6 +20,9 @@ import type { AppVariables } from "./types";
 
 type AppDependencies = {
   ready?: () => Promise<boolean>;
+  auth?: AuthRouterDependencies;
+  agent?: Omit<AgentCoreRouterOptions, "principal">;
+  collaboration?: Omit<CollaborationDependencies, "principal">;
 };
 
 async function databaseReady(): Promise<boolean> {
@@ -61,6 +73,62 @@ export function createApp(dependencies: AppDependencies = {}) {
     }
     return context.json({ status: "ready" });
   });
+
+  if (dependencies.auth) {
+    app.route("/api/v1", createAuthRouter(dependencies.auth));
+
+    const authenticated = async (context: AuthContext) => {
+      const principal = await resolvePrincipal(
+        context,
+        dependencies.auth as AuthRouterDependencies,
+      );
+      if (
+        principal.kind === "session" &&
+        !["GET", "HEAD", "OPTIONS"].includes(context.req.method)
+      ) {
+        await assertSessionMutation(context, dependencies.auth as AuthRouterDependencies);
+      }
+      return principal;
+    };
+
+    if (dependencies.agent) {
+      app.route(
+        "/",
+        createAgentCoreRouter({
+          ...dependencies.agent,
+          principal: async (context) => {
+            const principal = await authenticated(context as AuthContext);
+            return {
+              userId: principal.user.id,
+              tokenId: principal.token?.id ?? null,
+              scopes: principal.scopes,
+              projectIds: principal.token?.projectIds ?? [],
+            };
+          },
+        }),
+      );
+    }
+
+    if (dependencies.collaboration) {
+      app.route(
+        "/api/v1",
+        createCollaborationRouter({
+          ...dependencies.collaboration,
+          principal: async (context) => {
+            const principal = await authenticated(context as AuthContext);
+            return {
+              userId: principal.user.id,
+              email: principal.user.email,
+              projectIds: principal.token?.projectIds ?? [],
+              scopes: principal.scopes,
+              authKind: principal.kind === "session" ? "session" : "bearer",
+              ...(principal.token ? { tokenId: principal.token.id } : {}),
+            };
+          },
+        }),
+      );
+    }
+  }
 
   app.all("/api/*", () => {
     throw new HomingError("not_found", "Object not found.", 404);

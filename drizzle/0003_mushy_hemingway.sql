@@ -1,0 +1,6 @@
+DROP INDEX "idempotency_principal_endpoint_key_uniq";--> statement-breakpoint
+DROP INDEX "search_runs_idempotency_uniq";--> statement-breakpoint
+CREATE UNIQUE INDEX "idempotency_agent_principal_endpoint_key_uniq" ON "idempotency_keys" USING btree ("user_id","token_id","endpoint","key") WHERE "idempotency_keys"."token_id" is not null;--> statement-breakpoint
+CREATE UNIQUE INDEX "idempotency_session_principal_endpoint_key_uniq" ON "idempotency_keys" USING btree ("user_id","endpoint","key") WHERE "idempotency_keys"."token_id" is null;--> statement-breakpoint
+CREATE UNIQUE INDEX "search_runs_agent_idempotency_uniq" ON "search_runs" USING btree ("project_id","user_id","token_id","idempotency_key") WHERE "search_runs"."idempotency_key" <> '' and "search_runs"."token_id" is not null;--> statement-breakpoint
+CREATE UNIQUE INDEX "search_runs_session_idempotency_uniq" ON "search_runs" USING btree ("project_id","user_id","idempotency_key") WHERE "search_runs"."idempotency_key" <> '' and "search_runs"."token_id" is null;
