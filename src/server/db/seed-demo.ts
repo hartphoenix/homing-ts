@@ -201,13 +201,23 @@ export async function seedDemoAccounts(): Promise<void> {
         if (existing) {
           await transaction
             .update(leads)
-            .set({ source: lead.source })
+            .set({
+              source: lead.source,
+              listedAt:
+                index === 5 || index === 9
+                  ? null
+                  : new Date(Date.now() - (index + 1) * 86_400_000).toISOString().slice(0, 10),
+            })
             .where(eq(leads.id, existing.id));
           continue;
         }
 
         const status = "status" in lead ? lead.status : "active";
         const timestamp = new Date(Date.now() - index * 3_600_000);
+        const listedAt =
+          index === 5 || index === 9
+            ? null
+            : new Date(Date.now() - (index + 1) * 86_400_000).toISOString().slice(0, 10);
         await transaction.insert(leads).values({
           projectId: project.id,
           creatorId: project.creatorId,
@@ -223,6 +233,7 @@ export async function seedDemoAccounts(): Promise<void> {
           availability: lead.availability,
           housingType: lead.housingType,
           dateConfidence: lead.dateConfidence,
+          listedAt,
           parkNotes: lead.parkNotes,
           attributes: lead.attributes,
           verificationNotes:

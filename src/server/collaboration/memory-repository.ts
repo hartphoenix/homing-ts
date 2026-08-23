@@ -404,6 +404,23 @@ export class InMemoryCollaborationRepository implements CollaborationRepository 
             b.id.localeCompare(a.id)
           );
         }
+        if (options.sort === "price_asc" || options.sort === "price_desc") {
+          if (a.priceAmount === null) return 1;
+          if (b.priceAmount === null) return -1;
+          return options.sort === "price_asc"
+            ? a.priceAmount - b.priceAmount || a.id.localeCompare(b.id)
+            : b.priceAmount - a.priceAmount || b.id.localeCompare(a.id);
+        }
+        if (options.sort === "source_asc" || options.sort === "source_desc") {
+          const compared = a.source.localeCompare(b.source);
+          return (options.sort === "source_asc" ? compared : -compared) || a.id.localeCompare(b.id);
+        }
+        if (options.sort === "days_asc" || options.sort === "days_desc") {
+          if (a.listedAt === null) return 1;
+          if (b.listedAt === null) return -1;
+          const compared = a.listedAt.localeCompare(b.listedAt);
+          return (options.sort === "days_asc" ? -compared : compared) || a.id.localeCompare(b.id);
+        }
         return b.updatedAt.getTime() - a.updatedAt.getTime() || b.id.localeCompare(a.id);
       });
     const total = rows.length;
@@ -514,6 +531,7 @@ export class InMemoryCollaborationRepository implements CollaborationRepository 
           availability: item.availability ?? "",
           housingType: item.housing_type ?? "unknown",
           dateConfidence: item.date_confidence ?? "unknown",
+          listedAt: item.listed_at ?? null,
           parkNotes: item.parks ?? "",
           attributes: copy(item.attributes ?? {}),
           verificationNotes: item.verification_notes ?? "",
@@ -562,6 +580,7 @@ export class InMemoryCollaborationRepository implements CollaborationRepository 
         availability: item.availability ?? existing.availability,
         housingType: item.housing_type ?? existing.housingType,
         dateConfidence: item.date_confidence ?? existing.dateConfidence,
+        listedAt: item.listed_at === undefined ? existing.listedAt : item.listed_at,
         parkNotes: item.parks ?? existing.parkNotes,
         attributes: item.attributes ?? existing.attributes,
         verificationNotes: item.verification_notes ?? existing.verificationNotes,

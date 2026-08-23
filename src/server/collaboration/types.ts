@@ -84,6 +84,7 @@ export type LeadRecord = {
   availability: string;
   housingType: HousingType;
   dateConfidence: DateConfidence;
+  listedAt: string | null;
   parkNotes: string;
   attributes: Record<string, unknown>;
   verificationNotes: string;
@@ -112,6 +113,7 @@ export type LeadWrite = {
   availability?: string;
   housing_type?: HousingType;
   date_confidence?: DateConfidence;
+  listed_at?: string | null;
   parks?: string;
   attributes?: Record<string, unknown>;
   verification_notes?: string;
@@ -156,7 +158,17 @@ export type LeadListOptions = {
   query?: string;
   interestedUserId?: number;
   interestedByAnyone?: boolean;
-  sort?: "updated" | "newest" | "oldest" | "interest";
+  sort?:
+    | "updated"
+    | "newest"
+    | "oldest"
+    | "interest"
+    | "price_asc"
+    | "price_desc"
+    | "source_asc"
+    | "source_desc"
+    | "days_asc"
+    | "days_desc";
 };
 
 export type LeadStats = {

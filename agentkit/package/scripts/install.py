@@ -3409,6 +3409,8 @@ def lead_from(record, score):
         "observed_at": iso(),
         "date_confidence": "strong" if record.get("posted") else "unknown",
     }
+    if record.get("posted"):
+        lead["listed_at"] = str(record["posted"])[:10]
     summary = (score or {}).get("summary") or str(record.get("text") or "")
     if summary:
         lead["summary"] = summary[:10000]

@@ -12,6 +12,7 @@ import type {
   CollaborationRepository,
   CommentRecord,
   InvitationRecord,
+  LeadListOptions,
   LeadRecord,
   LeadWrite,
   MembershipRecord,
@@ -108,6 +109,7 @@ const leadWriteSchema = z
       .transform((value) => (housingType.safeParse(value).success ? value : undefined))
       .pipe(housingType.optional()),
     date_confidence: dateConfidence.optional(),
+    listed_at: z.iso.date().nullable().optional(),
     parks: z.string().max(1_000).optional(),
     attributes: boundedRecord.optional(),
     verification_notes: z.string().max(10_000).optional(),
@@ -281,6 +283,7 @@ function leadWire(
     availability: lead.availability,
     housing_type: lead.housingType,
     date_confidence: lead.dateConfidence,
+    listed_at: lead.listedAt,
     parks: lead.parkNotes,
     park_notes: lead.parkNotes,
     attributes: lead.attributes,
@@ -1053,7 +1056,20 @@ export function createCollaborationRouter(dependencies: CollaborationDependencie
     const after = context.req.query("cursor");
     const query = context.req.query("q")?.slice(0, 200);
     const requestedSort = context.req.query("sort") ?? "updated";
-    if (!["updated", "newest", "oldest", "interest"].includes(requestedSort))
+    if (
+      ![
+        "updated",
+        "newest",
+        "oldest",
+        "interest",
+        "price_asc",
+        "price_desc",
+        "source_asc",
+        "source_desc",
+        "days_asc",
+        "days_desc",
+      ].includes(requestedSort)
+    )
       throw new HomingError("validation_error", "sort is invalid.", 422);
     const interestScope =
       forcedInterest ??
@@ -1070,7 +1086,7 @@ export function createCollaborationRouter(dependencies: CollaborationDependencie
       ...(interestScope === "any" || interestScope === "anyone"
         ? { interestedByAnyone: true }
         : {}),
-      sort: requestedSort as "updated" | "newest" | "oldest" | "interest",
+      sort: requestedSort as NonNullable<LeadListOptions["sort"]>,
     });
     const items = await Promise.all(
       result.items.map((lead) => wireLead(projectId, lead, principal.userId)),
@@ -1366,6 +1382,7 @@ export function createCollaborationRouter(dependencies: CollaborationDependencie
     if (body.location !== undefined) patch.location = body.location;
     if (body.price_display !== undefined) patch.priceDisplay = body.price_display;
     if (body.price_amount !== undefined) patch.priceAmount = body.price_amount;
+    if (body.listed_at !== undefined) patch.listedAt = body.listed_at;
     if (body.currency !== undefined) patch.priceCurrency = body.currency;
     if (body.availability !== undefined) patch.availability = body.availability;
     if (body.housing_type !== undefined) patch.housingType = body.housing_type;

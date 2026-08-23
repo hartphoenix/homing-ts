@@ -72,6 +72,7 @@ function leadRecord(row: typeof leads.$inferSelect): LeadRecord {
     availability: row.availability,
     housingType: row.housingType,
     dateConfidence: row.dateConfidence,
+    listedAt: row.listedAt,
     parkNotes: row.parkNotes,
     attributes: row.attributes,
     verificationNotes: row.verificationNotes,
@@ -165,6 +166,7 @@ function leadInsert(projectId: string, actorId: number, item: LeadWrite) {
     availability: item.availability ?? "",
     housingType: item.housing_type ?? "unknown",
     dateConfidence: item.date_confidence ?? "unknown",
+    listedAt: item.listed_at ?? null,
     parkNotes: item.parks ?? "",
     attributes: item.attributes ?? {},
     verificationNotes: item.verification_notes ?? "",
@@ -188,6 +190,7 @@ function leadPatchFromWrite(existing: LeadRecord, item: LeadWrite): Partial<Lead
     availability: item.availability ?? existing.availability,
     housingType: item.housing_type ?? existing.housingType,
     dateConfidence: item.date_confidence ?? existing.dateConfidence,
+    listedAt: item.listed_at === undefined ? existing.listedAt : item.listed_at,
     parkNotes: item.parks ?? existing.parkNotes,
     attributes: item.attributes ?? existing.attributes,
     verificationNotes: item.verification_notes ?? existing.verificationNotes,
@@ -535,7 +538,17 @@ export class PostgresCollaborationRepository implements CollaborationRepository 
     if (options.after) {
       const cursor = await this.getLead(projectId, options.after);
       if (!cursor) return { items: [], total };
-      if (sort === "oldest") {
+      if (
+        ["price_asc", "price_desc", "source_asc", "source_desc", "days_asc", "days_desc"].includes(
+          sort,
+        )
+      ) {
+        throw new HomingError(
+          "validation_error",
+          "Cursor pagination is unavailable for this sort.",
+          422,
+        );
+      } else if (sort === "oldest") {
         const cursorCondition = or(
           gt(leads.createdAt, cursor.createdAt),
           and(eq(leads.createdAt, cursor.createdAt), gt(leads.id, cursor.id)),
@@ -576,7 +589,19 @@ export class PostgresCollaborationRepository implements CollaborationRepository 
           ? [desc(leads.createdAt), desc(leads.id)]
           : sort === "interest"
             ? [desc(interestTotal), desc(leads.updatedAt), desc(leads.id)]
-            : [desc(leads.updatedAt), desc(leads.id)];
+            : sort === "price_asc"
+              ? [asc(sql`${leads.priceAmount} is null`), asc(leads.priceAmount), asc(leads.id)]
+              : sort === "price_desc"
+                ? [asc(sql`${leads.priceAmount} is null`), desc(leads.priceAmount), desc(leads.id)]
+                : sort === "source_asc"
+                  ? [asc(leads.source), asc(leads.id)]
+                  : sort === "source_desc"
+                    ? [desc(leads.source), desc(leads.id)]
+                    : sort === "days_asc"
+                      ? [asc(sql`${leads.listedAt} is null`), desc(leads.listedAt), asc(leads.id)]
+                      : sort === "days_desc"
+                        ? [asc(sql`${leads.listedAt} is null`), asc(leads.listedAt), asc(leads.id)]
+                        : [desc(leads.updatedAt), desc(leads.id)];
     const rows = await this.db
       .select()
       .from(leads)
