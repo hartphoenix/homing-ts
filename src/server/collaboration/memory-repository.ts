@@ -374,7 +374,7 @@ export class InMemoryCollaborationRepository implements CollaborationRepository 
   async listLeads(
     projectId: string,
     options: LeadListOptions,
-  ): Promise<{ items: LeadRecord[]; next?: string }> {
+  ): Promise<{ items: LeadRecord[]; total: number; next?: string }> {
     const rows = [...this.leads.values()]
       .filter((lead) => lead.projectId === projectId && lead.status === options.status)
       .filter((lead) => {
@@ -406,6 +406,7 @@ export class InMemoryCollaborationRepository implements CollaborationRepository 
         }
         return b.updatedAt.getTime() - a.updatedAt.getTime() || b.id.localeCompare(a.id);
       });
+    const total = rows.length;
     let start = 0;
     if (options.after) {
       const index = rows.findIndex((lead) => lead.id === options.after);
@@ -414,7 +415,7 @@ export class InMemoryCollaborationRepository implements CollaborationRepository 
     const items = rows.slice(start, start + options.limit).map(copy);
     const hasNext = start + options.limit < rows.length;
     const last = items.at(-1);
-    return { items, ...(hasNext && last ? { next: last.id } : {}) };
+    return { items, total, ...(hasNext && last ? { next: last.id } : {}) };
   }
 
   async getLead(projectId: string, leadId: string): Promise<LeadRecord | null> {

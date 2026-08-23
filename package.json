@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "DATABASE_URL=postgresql://homing:homing@127.0.0.1:5432/homing PUBLIC_ORIGIN=http://localhost:5173 AUTH_THROTTLE_KEY=local-development-only-throttle-key bun --watch src/server/index.ts",
+    "dev": "DATABASE_URL=postgresql://homing:homing@127.0.0.1:5432/homing PUBLIC_ORIGIN=http://localhost:5173 AUTH_THROTTLE_KEY=local-development-only-throttle-key HOMING_DEMO_ACCOUNTS=1 bun --watch src/server/index.ts",
     "dev:client": "vite",
     "dev:db": "docker compose -f compose.dev.yaml up --detach --wait",
     "dev:setup": "bun run dev:db && DATABASE_URL=postgresql://homing:homing@127.0.0.1:5432/homing PUBLIC_ORIGIN=http://localhost:5173 AUTH_THROTTLE_KEY=local-development-only-throttle-key bun run db:migrate",

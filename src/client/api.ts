@@ -148,6 +148,8 @@ export type Lead = {
   summary: string;
   location: string;
   price_display: string;
+  price_amount?: number | null;
+  currency?: string;
   availability: string;
   housing_type: string;
   date_confidence: string;
@@ -156,6 +158,7 @@ export type Lead = {
   interested?: boolean;
   is_interested?: boolean;
   interest_count?: number;
+  interested_users?: string[];
   comment_count?: number;
   updated_at: string;
 };

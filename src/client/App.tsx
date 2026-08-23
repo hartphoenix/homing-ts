@@ -1,6 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, type ReactNode, useEffect, useState } from "react";
-import { Link, Navigate, NavLink, Route, Routes, useParams, useSearchParams } from "react-router";
+import {
+  Link,
+  Navigate,
+  NavLink,
+  Route,
+  Routes,
+  useNavigate,
+  useParams,
+  useSearchParams,
+} from "react-router";
 import { buildAgentSetupPrompt } from "./agentSetup";
 import {
   ApiError,
@@ -13,6 +22,7 @@ import {
   type Profile,
   type Project,
 } from "./api";
+import { detectedTimezone, timezoneLabel, timezoneOptions } from "./timezones";
 
 type AgentTokenSummary = {
   id: string;
@@ -127,9 +137,15 @@ function Shell({ me, children }: { me: Me; children: ReactNode }) {
           <NavLink to="/agent-setup">Agent setup</NavLink>
           <NavLink to="/settings">Settings</NavLink>
         </nav>
-        <button className="plain-button" onClick={() => logout.mutate()} type="button">
-          {me.profile?.display_name || me.user.email} · Sign out
-        </button>
+        <div className="account-menu">
+          <Link className="profile-link" to="/settings">
+            {me.profile?.display_name || me.user.email}
+          </Link>
+          <span aria-hidden="true">·</span>
+          <button className="plain-button" onClick={() => logout.mutate()} type="button">
+            Sign out
+          </button>
+        </div>
       </header>
       {children}
     </div>
@@ -250,7 +266,7 @@ function LeadIndex({ projectId }: { projectId: string }) {
         status === "trash"
           ? `/projects/${projectId}/trash?${params}`
           : `/projects/${projectId}/leads?${params}`;
-      return api<{ items: Lead[]; next_cursor?: string | null }>(path);
+      return api<{ items: Lead[]; total: number; next_cursor?: string | null }>(path);
     },
   });
   return (
@@ -291,8 +307,17 @@ function LeadIndex({ projectId }: { projectId: string }) {
             <p>{[lead.location, lead.availability].filter(Boolean).join(" · ")}</p>
             <p className="clamp">{lead.summary}</p>
             <footer>
-              <span>{lead.interest_count ? `♥ ${lead.interest_count}` : "No interest yet"}</span>
-              <span>Review →</span>
+              <span>
+                <span aria-hidden="true">
+                  {lead.interest_count ? `${lead.interest_count} ♥` : "♡"}
+                </span>
+                <span className="sr-only">{lead.interest_count ?? 0} interested</span>
+              </span>
+              {Boolean(lead.comment_count) && (
+                <span>
+                  {lead.comment_count} {lead.comment_count === 1 ? "comment" : "comments"}
+                </span>
+              )}
             </footer>
           </Link>
         ))}
@@ -313,6 +338,10 @@ function ProjectPage() {
     queryKey: ["project", projectId],
     queryFn: () => api<Project>(`/projects/${projectId}`),
   });
+  const activeLeadCount = useQuery({
+    queryKey: ["lead-count", projectId],
+    queryFn: () => api<{ total: number }>(`/projects/${projectId}/leads?limit=1`),
+  });
   if (project.isLoading) return <Loading />;
   return (
     <main className="page project-page">
@@ -324,7 +353,7 @@ function ProjectPage() {
       </header>
       <nav className="tabs" aria-label="Project">
         <NavLink end to={`/projects/${projectId}`}>
-          Leads
+          Leads{activeLeadCount.data?.total ? ` (${activeLeadCount.data.total})` : ""}
         </NavLink>
         <NavLink to={`/projects/${projectId}/brief`}>Brief</NavLink>
         <NavLink to={`/projects/${projectId}/members`}>People</NavLink>
@@ -569,7 +598,12 @@ function Members({ projectId, canManage }: { projectId: string; canManage: boole
 function LeadPage() {
   const { projectId = "", leadId = "" } = useParams();
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const [comment, setComment] = useState("");
+  const [isEditing, setIsEditing] = useState(false);
+  const [draftTitle, setDraftTitle] = useState("");
+  const [draftPrice, setDraftPrice] = useState("");
+  const [draftSummary, setDraftSummary] = useState("");
   const project = useQuery({
     queryKey: ["project", projectId],
     queryFn: () => api<Project>(`/projects/${projectId}`),
@@ -578,6 +612,12 @@ function LeadPage() {
     queryKey: ["lead", projectId, leadId],
     queryFn: () => api<Lead>(`/projects/${projectId}/leads/${leadId}`),
   });
+  useEffect(() => {
+    if (!lead.data || isEditing) return;
+    setDraftTitle(lead.data.title);
+    setDraftPrice(lead.data.price_display);
+    setDraftSummary(lead.data.summary);
+  }, [lead.data, isEditing]);
   const comments = useQuery({
     queryKey: ["comments", projectId, leadId],
     queryFn: () => api<{ items: Comment[] }>(`/projects/${projectId}/leads/${leadId}/comments`),
@@ -594,6 +634,58 @@ function LeadPage() {
       await queryClient.invalidateQueries({ queryKey: ["comments", projectId, leadId] });
     },
   });
+  const updateLead = useMutation({
+    mutationFn: () => {
+      if (!lead.data) throw new Error("The lead is not loaded.");
+      return api<Lead>(`/projects/${projectId}/leads/${leadId}`, {
+        method: "PATCH",
+        mutation: true,
+        headers: { "If-Match": `"${lead.data.revision}"` },
+        body: JSON.stringify({
+          title: draftTitle.trim(),
+          price_display: draftPrice.trim(),
+          summary: draftSummary,
+          expected_revision: lead.data.revision,
+        }),
+      });
+    },
+    onSuccess: async (updatedLead) => {
+      queryClient.setQueryData(["lead", projectId, leadId], updatedLead);
+      setIsEditing(false);
+      await queryClient.invalidateQueries({ queryKey: ["leads", projectId] });
+    },
+  });
+  const setInterest = useMutation({
+    mutationFn: (interested: boolean) =>
+      api(`/projects/${projectId}/leads/${leadId}/interest`, {
+        method: "POST",
+        mutation: true,
+        body: JSON.stringify({ interested }),
+      }),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["lead", projectId, leadId] }),
+        queryClient.invalidateQueries({ queryKey: ["leads", projectId] }),
+      ]);
+    },
+  });
+  const trashLead = useMutation({
+    mutationFn: () => {
+      if (!lead.data) throw new Error("The lead is not loaded.");
+      return api<Lead>(`/projects/${projectId}/leads/${leadId}`, {
+        method: "DELETE",
+        mutation: true,
+        headers: { "If-Match": `"${lead.data.revision}"` },
+      });
+    },
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["leads", projectId] }),
+        queryClient.invalidateQueries({ queryKey: ["lead-count", projectId] }),
+      ]);
+      navigate(`/projects/${projectId}`);
+    },
+  });
   return (
     <main className="page detail-page">
       <Link className="back" to={`/projects/${projectId}`}>
@@ -603,17 +695,105 @@ function LeadPage() {
       {lead.data && (
         <>
           <header className="detail-heading">
-            <h1>{lead.data.title}</h1>
-            <strong className="detail-price">{lead.data.price_display || "Price unknown"}</strong>
+            {isEditing ? (
+              <input
+                aria-label="Title"
+                className="detail-title-input"
+                maxLength={500}
+                onChange={(event) => setDraftTitle(event.target.value)}
+                required
+                value={draftTitle}
+              />
+            ) : (
+              <h1>{lead.data.title}</h1>
+            )}
+            {isEditing ? (
+              <input
+                aria-label="Price"
+                className="detail-price detail-price-input"
+                maxLength={200}
+                onChange={(event) => setDraftPrice(event.target.value)}
+                placeholder="Price unknown"
+                value={draftPrice}
+              />
+            ) : (
+              <strong className="detail-price">{lead.data.price_display || "Price unknown"}</strong>
+            )}
             <a className="button primary" href={lead.data.url} target="_blank" rel="noreferrer">
               Open listing ↗
             </a>
           </header>
           <div className="detail-grid">
-            <article className="panel prose">
+            <article className="panel prose lead-detail-card">
               <h2>What we know</h2>
-              <p>{lead.data.summary || "No summary yet."}</p>
+              {isEditing ? (
+                <textarea
+                  aria-label="Description"
+                  maxLength={30000}
+                  onChange={(event) => setDraftSummary(event.target.value)}
+                  rows={7}
+                  value={draftSummary}
+                />
+              ) : (
+                <p>{lead.data.summary || "No summary yet."}</p>
+              )}
+              <Message error={updateLead.error ?? setInterest.error ?? trashLead.error} />
+              {isEditing ? (
+                <div className="lead-edit-actions">
+                  <button className="button" onClick={() => setIsEditing(false)} type="button">
+                    Cancel
+                  </button>
+                  <button
+                    className="button primary"
+                    disabled={updateLead.isPending || !draftTitle.trim()}
+                    onClick={() => updateLead.mutate()}
+                    type="button"
+                  >
+                    {updateLead.isPending ? "Saving…" : "Save lead"}
+                  </button>
+                </div>
+              ) : (
+                <div className="lead-detail-actions">
+                  <button
+                    aria-label={lead.data.interested ? "Remove interest" : "Mark interested"}
+                    className={`icon-button${lead.data.interested ? " active" : ""}`}
+                    disabled={setInterest.isPending}
+                    onClick={() => setInterest.mutate(!lead.data?.interested)}
+                    title={lead.data.interested ? "Remove interest" : "Mark interested"}
+                    type="button"
+                  >
+                    <span aria-hidden="true">{lead.data.interested ? "♥" : "♡"}</span>
+                  </button>
+                  <button
+                    aria-label="Move to trash"
+                    className="icon-button"
+                    disabled={trashLead.isPending}
+                    onClick={() => trashLead.mutate()}
+                    title="Move to trash"
+                    type="button"
+                  >
+                    <span aria-hidden="true">×</span>
+                  </button>
+                  <button
+                    aria-label="Edit lead"
+                    className="icon-button"
+                    onClick={() => setIsEditing(true)}
+                    title="Edit lead"
+                    type="button"
+                  >
+                    <svg aria-hidden="true" viewBox="0 0 24 24">
+                      <path d="m19 5-3-3L4 14l-1 5 5-1L20 6l-1-1Z" />
+                      <path d="m14 4 4 4" />
+                    </svg>
+                  </button>
+                </div>
+              )}
             </article>
+            {(lead.data.interested_users?.length ?? 0) > 0 && (
+              <p className="interested-members">
+                Interested: {lead.data.interested_users?.join(", ")}
+              </p>
+            )}
             <aside className="panel">
               <h2>Conversation</h2>
               <div className="comments">
@@ -856,8 +1036,12 @@ type ProfilePatch = Pick<Profile, "display_name" | "timezone" | "bio">;
 
 function ProfileSettingsForm({ profile }: { profile: Profile }) {
   const queryClient = useQueryClient();
+  const browserTimezone = detectedTimezone();
+  const availableTimezones = timezoneOptions();
   const [displayName, setDisplayName] = useState(profile.display_name);
-  const [timezone, setTimezone] = useState(profile.timezone);
+  const [timezone, setTimezone] = useState(
+    profile.timezone === "UTC" && browserTimezone !== "UTC" ? browserTimezone : profile.timezone,
+  );
   const [bio, setBio] = useState(profile.bio);
   const [saveStatus, setSaveStatus] = useState("");
   const saveProfile = useMutation({
@@ -908,14 +1092,18 @@ function ProfileSettingsForm({ profile }: { profile: Profile }) {
           </label>
           <label>
             Timezone
-            <input
-              autoComplete="off"
-              maxLength={64}
-              onChange={(event) => setTimezone(event.target.value)}
-              placeholder="America/New_York"
-              required
-              value={timezone}
-            />
+            <select onChange={(event) => setTimezone(event.target.value)} required value={timezone}>
+              <optgroup label="Detected from this browser">
+                <option value={browserTimezone}>{timezoneLabel(browserTimezone)}</option>
+              </optgroup>
+              <optgroup label="All timezones, sorted by city">
+                {availableTimezones.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </optgroup>
+            </select>
           </label>
           <label className="profile-field-wide">
             Bio

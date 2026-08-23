@@ -1075,7 +1075,11 @@ export function createCollaborationRouter(dependencies: CollaborationDependencie
     const items = await Promise.all(
       result.items.map((lead) => wireLead(projectId, lead, principal.userId)),
     );
-    return json(context, 200, { items, next_cursor: result.next ?? null });
+    return json(context, 200, {
+      items,
+      total: result.total,
+      next_cursor: result.next ?? null,
+    });
   }
 
   app.get("/projects/:projectId/leads/interested", async (context) => {

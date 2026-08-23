@@ -74,18 +74,28 @@ test("edits the production profile fields and manages connection history", async
   await expect(page.getByRole("heading", { name: "Your profile" })).toBeVisible();
   await expect(page.getByLabel("Display name")).toHaveValue("Hart");
   await expect(page.getByLabel("Timezone")).toHaveValue("America/New_York");
+  await expect(page.getByLabel("Timezone").locator("optgroup").first()).toHaveAttribute(
+    "label",
+    "Detected from this browser",
+  );
   await expect(page.getByLabel("Bio")).toHaveValue("Looking for a durable home base.");
   await expect(page.getByText("Few stairs preferred")).toHaveCount(0);
   await expect(page.getByLabel("Personal details")).toHaveCount(0);
 
   await page.getByLabel("Display name").fill("Hart Phoenix");
+  await page.getByLabel("Timezone").selectOption("Europe/Paris");
   await page.getByLabel("Bio").fill("Searching collaboratively.");
   await page.getByRole("button", { name: "Save profile" }).click();
 
   await expect.poll(() => savedProfile?.display_name).toBe("Hart Phoenix");
+  expect(savedProfile?.timezone).toBe("Europe/Paris");
   expect(savedProfile).not.toHaveProperty("details");
   await expect(page.getByRole("status").filter({ hasText: "Profile saved." })).toBeVisible();
-  await expect(page.getByRole("button", { name: /Hart Phoenix · Sign out/ })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Hart Phoenix" })).toHaveAttribute(
+    "href",
+    "/settings",
+  );
+  await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
 
   const activeConnection = page.getByRole("listitem").filter({ hasText: "Studio agent" });
   const expiredConnection = page.getByRole("listitem").filter({ hasText: "Old laptop" });

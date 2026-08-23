@@ -4,6 +4,7 @@ const projectId = "11111111-1111-4111-8111-111111111111";
 const leadId = "44444444-4444-4444-8444-444444444444";
 
 test("places price and conversation in the lead content column", async ({ page }) => {
+  await page.setViewportSize({ width: 1470, height: 816 });
   await page.route("**/api/v1/me", async (route) => {
     await route.fulfill({
       contentType: "application/json",
@@ -65,6 +66,7 @@ test("places price and conversation in the lead content column", async ({ page }
   await expect(page.locator(".detail-heading .source")).toHaveCount(0);
 
   const main = await page.locator("main.detail-page").boundingBox();
+  const back = await page.locator("main.detail-page > a.back").boundingBox();
   const detailHeading = await page.locator("header.detail-heading").boundingBox();
   const heading = await page.getByRole("heading", { level: 1 }).boundingBox();
   const price = await page.locator(".detail-price").boundingBox();
@@ -73,21 +75,34 @@ test("places price and conversation in the lead content column", async ({ page }
   const conversation = await page.locator("aside.panel").boundingBox();
 
   expect(main).not.toBeNull();
+  expect(back).not.toBeNull();
   expect(detailHeading).not.toBeNull();
   expect(heading).not.toBeNull();
   expect(price).not.toBeNull();
   expect(listingLink).not.toBeNull();
   expect(article).not.toBeNull();
   expect(conversation).not.toBeNull();
-  if (!main || !detailHeading || !heading || !price || !listingLink || !article || !conversation)
+  if (
+    !main ||
+    !back ||
+    !detailHeading ||
+    !heading ||
+    !price ||
+    !listingLink ||
+    !article ||
+    !conversation
+  )
     return;
 
   expect(detailHeading.width / main.width).toBeCloseTo(0.68, 2);
   expect(heading.width).toBeCloseTo(detailHeading.width, 0);
+  expect(heading.y - (back.y + back.height)).toBeLessThanOrEqual(32);
   expect(price.x).toBeCloseTo(main.x, 0);
-  expect(price.y).toBeGreaterThanOrEqual(heading.y + heading.height - 1);
+  expect(price.y - (heading.y + heading.height)).toBeGreaterThanOrEqual(0);
+  expect(price.y - (heading.y + heading.height)).toBeLessThanOrEqual(16);
   expect(listingLink.y + listingLink.height).toBeCloseTo(price.y + price.height, 0);
   expect(listingLink.x + listingLink.width).toBeCloseTo(detailHeading.x + detailHeading.width, 0);
+  expect(article.y - (price.y + price.height)).toBeLessThanOrEqual(24);
   expect(conversation.x).toBeCloseTo(main.x, 0);
   expect(conversation.width / main.width).toBeCloseTo(0.68, 2);
   expect(conversation.y).toBeGreaterThan(article.y + article.height);

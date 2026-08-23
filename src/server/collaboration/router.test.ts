@@ -278,6 +278,7 @@ describe("collaboration routes", () => {
     );
     expect(await interested.json()).toMatchObject({
       items: [{ id: leadOne, interest_count: 1 }],
+      total: 1,
       next_cursor: null,
     });
 

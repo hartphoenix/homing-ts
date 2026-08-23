@@ -222,7 +222,7 @@ export interface CollaborationRepository {
   listLeads(
     projectId: string,
     options: LeadListOptions,
-  ): Promise<{ items: LeadRecord[]; next?: string }>;
+  ): Promise<{ items: LeadRecord[]; total: number; next?: string }>;
   getLead(projectId: string, leadId: string): Promise<LeadRecord | null>;
   createLead(lead: LeadRecord): Promise<LeadRecord>;
   updateLead(

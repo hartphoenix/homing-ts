@@ -489,7 +489,7 @@ export class PostgresCollaborationRepository implements CollaborationRepository 
   async listLeads(
     projectId: string,
     options: LeadListOptions,
-  ): Promise<{ items: LeadRecord[]; next?: string }> {
+  ): Promise<{ items: LeadRecord[]; total: number; next?: string }> {
     const conditions = [eq(leads.projectId, projectId), eq(leads.status, options.status)];
     const interestTotal = sql<number>`(
       select count(*)::int
@@ -525,10 +525,16 @@ export class PostgresCollaborationRepository implements CollaborationRepository 
       );
     }
 
+    const [totalRow] = await this.db
+      .select({ value: count() })
+      .from(leads)
+      .where(and(...conditions));
+    const total = totalRow?.value ?? 0;
+
     const sort = options.sort ?? "updated";
     if (options.after) {
       const cursor = await this.getLead(projectId, options.after);
-      if (!cursor) return { items: [] };
+      if (!cursor) return { items: [], total };
       if (sort === "oldest") {
         const cursorCondition = or(
           gt(leads.createdAt, cursor.createdAt),
@@ -580,7 +586,7 @@ export class PostgresCollaborationRepository implements CollaborationRepository 
     const hasNext = rows.length > options.limit;
     const page = rows.slice(0, options.limit).map(leadRecord);
     const last = page.at(-1);
-    return { items: page, ...(hasNext && last ? { next: last.id } : {}) };
+    return { items: page, total, ...(hasNext && last ? { next: last.id } : {}) };
   }
 
   async getLead(projectId: string, leadId: string): Promise<LeadRecord | null> {

@@ -3,8 +3,11 @@ import { createApp } from "./app";
 import { DrizzleAuthRepository } from "./auth/drizzle-repository";
 import { PostgresCollaborationRepository } from "./collaboration/postgres-repository";
 import { getConfig } from "./config";
+import { seedDemoAccounts } from "./db/seed-demo";
 
 const config = getConfig();
+if (process.env.HOMING_DEMO_ACCOUNTS === "1") await seedDemoAccounts();
+
 const agentServices = createPostgresAgentServices();
 const app = createApp({
   auth: {
