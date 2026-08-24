@@ -9,6 +9,7 @@
   --paper: #fffdf7;
   --line: #d9d7cb;
   --accent: #a9c5a1;
+  --interest: #8b3f34;
   --moss: #275d4e;
   --soft: #e8e5d9;
   --glass: rgb(255 253 247 / 60%);
@@ -324,6 +325,64 @@ textarea {
 
 .topbar .plain-button {
   justify-self: end;
+}
+
+.mobile-menu {
+  position: relative;
+  display: none;
+  justify-self: end;
+}
+
+.mobile-menu-trigger {
+  display: inline-grid;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  padding: 0.4rem;
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+.topbar .mobile-menu-panel {
+  position: absolute;
+  top: calc(100% + 0.65rem);
+  right: 0;
+  display: grid;
+  grid-template-columns: 1fr;
+  width: min(15rem, calc(100vw - 2rem));
+  border: 1px solid var(--glass-border);
+  border-radius: 0.9rem;
+  background: rgb(255 253 247 / 94%);
+  box-shadow: 0 14px 35px rgb(25 35 31 / 18%);
+  padding: 0.45rem;
+}
+
+.topbar .mobile-menu-panel a,
+.mobile-menu-panel button {
+  width: 100%;
+  border: 0;
+  border-radius: 0.55rem;
+  background: transparent;
+  padding: 0.75rem 0.8rem;
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 0.86rem;
+  font-weight: 600;
+  text-align: left;
+}
+
+.topbar .mobile-menu-panel a:hover,
+.mobile-menu-panel button:hover {
+  background: var(--glass-field);
+}
+
+.mobile-menu-panel .mobile-view-action,
+.mobile-menu-panel .mobile-sign-out {
+  margin-top: 0.25rem;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
 }
 
 .page {
@@ -709,6 +768,30 @@ textarea {
   background: rgb(255 255 255 / 38%);
 }
 
+.interest-column {
+  color: var(--interest);
+  text-align: center;
+}
+
+.interest-toggle {
+  min-width: 2.75rem;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.interest-toggle[aria-pressed="true"] {
+  color: var(--interest);
+  font-weight: 700;
+}
+
+.interest-toggle:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
 .lead-card-top,
 .detail-heading {
   display: flex;
@@ -954,6 +1037,12 @@ textarea {
 .icon-button.active {
   border-color: var(--accent);
   color: var(--accent);
+}
+
+.icon-button.interest-button:hover:not(:disabled),
+.icon-button.interest-button.active {
+  border-color: var(--interest);
+  color: var(--interest);
 }
 
 .icon-button:disabled {
@@ -1371,18 +1460,22 @@ textarea {
   }
 
   .topbar {
-    display: flex;
+    display: grid;
     min-height: auto;
-    flex-wrap: wrap;
-    justify-content: space-between;
-    gap: 0.75rem;
+    grid-template-columns: 1fr auto;
     padding: 0.9rem 1rem;
   }
 
-  .topbar nav {
-    width: 100%;
-    justify-content: space-between;
-    gap: 0.5rem;
+  .topbar .desktop-nav {
+    display: none;
+  }
+
+  .mobile-menu {
+    display: block;
+  }
+
+  .project-tabs-row .view-toggle {
+    display: none;
   }
 
   .page {

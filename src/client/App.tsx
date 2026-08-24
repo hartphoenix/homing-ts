@@ -123,6 +123,10 @@ function daysOnMarket(listedAt: string | null | undefined): string {
   return `${days} ${days === 1 ? "day" : "days"}`;
 }
 
+function compactDaysOnMarket(listedAt: string | null | undefined): string {
+  return daysOnMarket(listedAt).replace(/ days?$/, "d");
+}
+
 function listPrice(price: string): string {
   return price.replace(/\s*\/\s*(?:month|mo\.?)\s*$/i, "");
 }
@@ -201,6 +205,11 @@ function LoginPage() {
 
 function Shell({ me, children }: { me: Me; children: ReactNode }) {
   const queryClient = useQueryClient();
+  const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const projectLeadIndex = /^\/projects\/[^/]+\/?$/.test(location.pathname);
+  const currentView = searchParams.get("view") === "list" ? "list" : "cards";
   const logout = useMutation({
     mutationFn: () => api<void>("/session", { method: "DELETE", mutation: true }),
     onSuccess: async () => {
@@ -215,8 +224,10 @@ function Shell({ me, children }: { me: Me; children: ReactNode }) {
         <Link className="wordmark" to="/">
           Homing
         </Link>
-        <nav aria-label="Primary">
-          <NavLink to="/">Searches</NavLink>
+        <nav aria-label="Primary" className="desktop-nav">
+          <NavLink end to="/">
+            Searches
+          </NavLink>
           <NavLink to="/agent-setup">Agent setup</NavLink>
           <NavLink to="/settings">Settings</NavLink>
         </nav>
@@ -228,6 +239,59 @@ function Shell({ me, children }: { me: Me; children: ReactNode }) {
           <button className="plain-button" onClick={() => logout.mutate()} type="button">
             Sign out
           </button>
+        </div>
+        <div className="mobile-menu">
+          <button
+            aria-controls="mobile-navigation"
+            aria-expanded={mobileMenuOpen}
+            aria-label={mobileMenuOpen ? "Close navigation menu" : "Open navigation menu"}
+            className="mobile-menu-trigger"
+            onClick={() => setMobileMenuOpen((open) => !open)}
+            type="button"
+          >
+            <span aria-hidden="true">☰</span>
+          </button>
+          {mobileMenuOpen && (
+            <nav
+              aria-label="Mobile navigation"
+              className="mobile-menu-panel"
+              id="mobile-navigation"
+            >
+              <NavLink end onClick={() => setMobileMenuOpen(false)} to="/">
+                Searches
+              </NavLink>
+              <NavLink onClick={() => setMobileMenuOpen(false)} to="/agent-setup">
+                Agent setup
+              </NavLink>
+              <NavLink onClick={() => setMobileMenuOpen(false)} to="/settings">
+                Settings
+              </NavLink>
+              {projectLeadIndex && (
+                <button
+                  className="mobile-view-action"
+                  onClick={() => {
+                    const next = new URLSearchParams(searchParams);
+                    currentView === "cards" ? next.set("view", "list") : next.delete("view");
+                    setSearchParams(next);
+                    setMobileMenuOpen(false);
+                  }}
+                  type="button"
+                >
+                  View as {currentView === "cards" ? "list" : "cards"}
+                </button>
+              )}
+              <button
+                className="mobile-sign-out"
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  logout.mutate();
+                }}
+                type="button"
+              >
+                Sign out
+              </button>
+            </nav>
+          )}
         </div>
       </header>
       {children}
@@ -398,6 +462,17 @@ function LeadIndex({ projectId }: { projectId: string }) {
       ]);
     },
   });
+  const setInterest = useMutation({
+    mutationFn: ({ leadId, interested }: { leadId: string; interested: boolean }) =>
+      api(`/projects/${projectId}/leads/${leadId}/interest`, {
+        method: "POST",
+        mutation: true,
+        body: JSON.stringify({ interested }),
+      }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["leads", projectId] });
+    },
+  });
   const toggleSelected = (leadId: string) =>
     setSelected((current) =>
       current.includes(leadId) ? current.filter((id) => id !== leadId) : [...current, leadId],
@@ -545,17 +620,15 @@ function LeadIndex({ projectId }: { projectId: string }) {
                     Price
                   </button>
                 </th>
-                <th aria-sort={sortDirection("source")}>
-                  <button onClick={() => setSort("source")} type="button">
-                    Source
-                  </button>
-                </th>
                 <th aria-sort={sortDirection("days")}>
                   <button onClick={() => setSort("days")} type="button">
-                    Days on market
+                    On market
                   </button>
                 </th>
-                <th>Interest</th>
+                <th className="interest-column">
+                  <span aria-hidden="true">♥</span>
+                  <span className="sr-only">Interest</span>
+                </th>
                 <th>Comments</th>
               </tr>
             </thead>
@@ -577,9 +650,26 @@ function LeadIndex({ projectId }: { projectId: string }) {
                     </Link>
                   </td>
                   <td>{lead.price_display ? listPrice(lead.price_display) : "Unknown"}</td>
-                  <td>{lead.source}</td>
-                  <td>{daysOnMarket(lead.listed_at)}</td>
-                  <td>{lead.interest_count ? `${lead.interest_count} ♥` : "♡"}</td>
+                  <td>{compactDaysOnMarket(lead.listed_at)}</td>
+                  <td>
+                    <button
+                      aria-label={`${(lead.interested ?? lead.is_interested) ? "Remove interest from" : "Mark interested in"} ${lead.title}`}
+                      aria-pressed={Boolean(lead.interested ?? lead.is_interested)}
+                      className="interest-toggle"
+                      disabled={setInterest.isPending}
+                      onClick={() =>
+                        setInterest.mutate({
+                          leadId: lead.id,
+                          interested: !(lead.interested ?? lead.is_interested),
+                        })
+                      }
+                      type="button"
+                    >
+                      {lead.interest_count
+                        ? `${lead.interest_count} ${(lead.interested ?? lead.is_interested) ? "♥" : "♡"}`
+                        : "♡"}
+                    </button>
+                  </td>
                   <td>{lead.comment_count || ""}</td>
                 </tr>
               ))}
@@ -1119,7 +1209,7 @@ function LeadPage() {
                 <div className="lead-detail-actions">
                   <button
                     aria-label={lead.data.interested ? "Remove interest" : "Mark interested"}
-                    className={`icon-button${lead.data.interested ? " active" : ""}`}
+                    className={`icon-button interest-button${lead.data.interested ? " active" : ""}`}
                     disabled={setInterest.isPending}
                     onClick={() => setInterest.mutate(!lead.data?.interested)}
                     title={lead.data.interested ? "Remove interest" : "Mark interested"}
