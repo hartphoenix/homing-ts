@@ -16,6 +16,7 @@ const leads = [
     listed_at: "2026-08-20",
     status: "active",
     revision: 1,
+    interested: true,
     interest_count: 2,
     comment_count: 4,
     updated_at: "2026-08-22T12:00:00Z",
@@ -33,6 +34,7 @@ const leads = [
     listed_at: "2026-08-18",
     status: "active",
     revision: 1,
+    interested: false,
     interest_count: 0,
     comment_count: 0,
     updated_at: "2026-08-21T12:00:00Z",
@@ -50,6 +52,7 @@ const leads = [
     listed_at: null,
     status: "active",
     revision: 1,
+    interested: false,
     interest_count: 0,
     comment_count: 1,
     updated_at: "2026-08-20T12:00:00Z",
@@ -122,6 +125,19 @@ test("list mode is compact, sortable, searchable, and supports batch actions", a
     });
   });
 
+  let interestBody: { interested: boolean } | undefined;
+  await page.route(`**/api/v1/projects/${projectId}/leads/*/interest`, async (route) => {
+    interestBody = route.request().postDataJSON() as { interested: boolean };
+    const leadId = new URL(route.request().url()).pathname.split("/").at(-2);
+    const lead = leads.find((item) => item.id === leadId);
+    if (lead) {
+      if (interestBody.interested && !lead.interested) lead.interest_count += 1;
+      if (!interestBody.interested && lead.interested) lead.interest_count -= 1;
+      lead.interested = interestBody.interested;
+    }
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify(interestBody) });
+  });
+
   let batchBody: unknown;
   await page.route(`**/api/v1/projects/${projectId}/leads/batch`, async (route) => {
     batchBody = route.request().postDataJSON();
@@ -134,10 +150,19 @@ test("list mode is compact, sortable, searchable, and supports batch actions", a
   const table = page.getByRole("table");
   await expect(table).toBeVisible();
   await expect(page.locator(".lead-card")).toHaveCount(0);
-  await expect(page.getByRole("columnheader", { name: "Days on market" })).toBeVisible();
+  await expect(page.getByRole("columnheader", { name: "On market" })).toBeVisible();
+  await expect(page.getByRole("columnheader", { name: "Source" })).toHaveCount(0);
+  await expect(page.getByRole("columnheader", { name: "Interest" })).toBeVisible();
   await expect(page.getByRole("row")).toHaveCount(4);
   await expect(table).toContainText("$3,200");
   await expect(table).not.toContainText("/ month");
+  const parksideRow = page.getByRole("row").filter({ hasText: "Parkside one-bedroom" });
+  await expect(parksideRow).toContainText(/\d+d/);
+  await expect(parksideRow.getByRole("button", { name: /Remove interest/ })).toHaveText("2 ♥");
+  const gardenRow = page.getByRole("row").filter({ hasText: "Garden studio" });
+  await gardenRow.getByRole("button", { name: /Mark interested/ }).click();
+  await expect.poll(() => interestBody).toEqual({ interested: true });
+  await expect(gardenRow.getByRole("button", { name: /Remove interest/ })).toHaveText("1 ♥");
 
   const mainBox = await page.locator("main.project-page").boundingBox();
   const tableBox = await page.locator(".lead-table-wrap").boundingBox();
@@ -149,15 +174,9 @@ test("list mode is compact, sortable, searchable, and supports batch actions", a
   }
   await page.getByRole("button", { name: "Price" }).click();
   await expect(page.getByRole("row").nth(1)).toContainText("Garden studio");
-  await page.getByRole("button", { name: "Source" }).click();
-  await expect(page.getByRole("row").nth(1)).toContainText("Craigslist");
-  await expect(page.getByRole("columnheader", { name: "Source" })).toHaveAttribute(
-    "aria-sort",
-    "ascending",
-  );
-  await page.getByRole("button", { name: "Days on market" }).click();
+  await page.getByRole("button", { name: "On market" }).click();
   await expect(page.getByRole("row").last()).toContainText("Unlisted loft");
-  await expect(page.getByRole("columnheader", { name: "Days on market" })).toHaveAttribute(
+  await expect(page.getByRole("columnheader", { name: "On market" })).toHaveAttribute(
     "aria-sort",
     "ascending",
   );
