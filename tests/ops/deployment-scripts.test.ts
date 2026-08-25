@@ -92,9 +92,15 @@ case "$*" in
   *'exec source-db sh -c '*'printf %s'*) printf 'django_fixture\n'; exit 0 ;;
   *'network connect '*) exit 0 ;;
   *'inspect source-db') exit 0 ;;
-  *'exec -i source-db '*) cat >/dev/null; exit 0 ;;
+  *'exec -i source-db '*)
+    payload=$(cat)
+    case "$payload" in
+      *'DROP ROLE'*) exit "$FAKE_DROP_STATUS" ;;
+      *) exit 0 ;;
+    esac
+    ;;
   *'network disconnect '*) exit "$FAKE_DISCONNECT_STATUS" ;;
-  *' run --rm --no-deps --no-TTY '*) exit 0 ;;
+  *' run --rm --no-deps --no-TTY '*) exit "$FAKE_IMPORT_STATUS" ;;
   *) exit 1 ;;
 esac
 `;
@@ -121,6 +127,8 @@ function runScript(
         FAKE_INVENTORY_EARLY_CLOSE: "0",
         FAKE_RESTORE_STATUS: "0",
         FAKE_TARGET_WEB_RUNNING: "0",
+        FAKE_DROP_STATUS: "0",
+        FAKE_IMPORT_STATUS: "0",
         FAKE_BAD_ENVELOPE: "0",
         RESTORE_CONFIRM: "YES",
         HOMING_ENV_FILE: "",
@@ -346,8 +354,9 @@ describe("deployment script failure paths", () => {
       MIGRATION_CUTOVER_AT: "2026-08-25T04:00:00Z",
       FAKE_DISCONNECT_STATUS: "37",
     });
-    expect(result.code).not.toBe(0);
+    expect(result.code).toBe(125);
     expect(result.output).toContain("failed to disconnect temporary Django import network");
+    expect(result.output).toContain("manual intervention required");
     expect(result.output).not.toContain("cleanup completed");
     const log = await readFile(join(root, "docker.log"), "utf8");
     expect(log).toContain("exec -i source-db");
@@ -356,6 +365,27 @@ describe("deployment script failure paths", () => {
     expect(log).toContain("network disconnect homing-test_database source-db");
     expect(log).toContain("--context default compose --project-name homing-ts");
     expect(log).toContain("--context default compose --project-name homing");
+  });
+
+  it("returns a manual-intervention status when import and cleanup both fail", async () => {
+    await installMocksAndEnvironment();
+    const djangoRoot = join(root, "django");
+    await mkdir(djangoRoot);
+    await writeFile(join(djangoRoot, ".env"), "POSTGRES_DB=django_fixture\n");
+    await writeFile(join(djangoRoot, "compose.yaml"), "services: {}\n");
+    await chmod(join(djangoRoot, ".env"), 0o600);
+    await writeFile(join(root, "bin", "docker"), fakeImportDocker);
+    await chmod(join(root, "bin", "docker"), 0o755);
+
+    const result = await runScript(importScript, root, {
+      DJANGO_PROJECT_DIR: djangoRoot,
+      MIGRATION_CUTOVER_AT: "2026-08-25T04:00:00Z",
+      FAKE_DROP_STATUS: "37",
+      FAKE_IMPORT_STATUS: "41",
+    });
+    expect(result.code).toBe(125);
+    expect(result.output).toContain("failed to drop temporary Django import role");
+    expect(result.output).toContain("manual intervention required");
   });
 
   it("authenticates source role creation and cleanup without exposing the password", async () => {
