@@ -105,6 +105,13 @@ source_database=$(docker_cmd exec "$source_db" sh -c 'printf %s "$POSTGRES_DB"')
 case "$source_database" in
   ""|*[!A-Za-z0-9_]* ) echo "Django database name is not a safe identifier" >&2; exit 1 ;;
 esac
+source_psql() {
+  docker_cmd exec -i "$source_db" sh -c '
+    export PGPASSWORD="$POSTGRES_PASSWORD"
+    exec psql --host=127.0.0.1 -v ON_ERROR_STOP=1 \
+      -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+  '
+}
 
 suffix=$(openssl rand -hex 8)
 source_role="homing_ts_import_$suffix"
@@ -122,7 +129,7 @@ cleanup() {
     if ! docker_cmd inspect "$source_db" >/dev/null 2>&1; then
       echo "cannot inspect Django database while dropping temporary import role" >&2
       cleanup_failed=1
-    elif ! docker_cmd exec -i "$source_db" sh -c 'exec psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' <<SQL >/dev/null 2>&1
+    elif ! source_psql <<SQL >/dev/null 2>&1
 SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE usename = '$source_role';
 DROP OWNED BY "$source_role";
 DROP ROLE IF EXISTS "$source_role";
@@ -157,7 +164,7 @@ docker_cmd network connect --alias "$source_alias" "$target_network" "$source_db
 network_connected=1
 
 role_created=1
-docker_cmd exec -i "$source_db" sh -c 'exec psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' <<SQL >/dev/null
+source_psql <<SQL >/dev/null
 CREATE ROLE "$source_role" LOGIN PASSWORD '$source_password'
   NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
 ALTER ROLE "$source_role" SET default_transaction_read_only = on;

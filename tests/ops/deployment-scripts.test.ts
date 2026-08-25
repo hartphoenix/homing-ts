@@ -351,9 +351,34 @@ describe("deployment script failure paths", () => {
     expect(result.output).not.toContain("cleanup completed");
     const log = await readFile(join(root, "docker.log"), "utf8");
     expect(log).toContain("exec -i source-db");
+    expect(log.match(/PGPASSWORD="\$POSTGRES_PASSWORD"/g)).toHaveLength(2);
+    expect(log.match(/psql --host=127\.0\.0\.1/g)).toHaveLength(2);
     expect(log).toContain("network disconnect homing-test_database source-db");
     expect(log).toContain("--context default compose --project-name homing-ts");
     expect(log).toContain("--context default compose --project-name homing");
+  });
+
+  it("authenticates source role creation and cleanup without exposing the password", async () => {
+    await installMocksAndEnvironment();
+    const djangoRoot = join(root, "django");
+    await mkdir(djangoRoot);
+    await writeFile(join(djangoRoot, ".env"), "POSTGRES_DB=django_fixture\n");
+    await writeFile(join(djangoRoot, "compose.yaml"), "services: {}\n");
+    await chmod(join(djangoRoot, ".env"), 0o600);
+    await writeFile(join(root, "bin", "docker"), fakeImportDocker);
+    await chmod(join(root, "bin", "docker"), 0o755);
+
+    const result = await runScript(importScript, root, {
+      DJANGO_PROJECT_DIR: djangoRoot,
+      MIGRATION_CUTOVER_AT: "2026-08-25T04:00:00Z",
+      FAKE_DISCONNECT_STATUS: "0",
+    });
+    expect(result.code).toBe(0);
+    expect(result.output).toContain("frozen Django import, validation, and cleanup completed");
+    const log = await readFile(join(root, "docker.log"), "utf8");
+    expect(log.match(/PGPASSWORD="\$POSTGRES_PASSWORD"/g)).toHaveLength(2);
+    expect(log.match(/psql --host=127\.0\.0\.1/g)).toHaveLength(2);
+    expect(log).not.toContain("test-password-only");
   });
 
   it("refuses import while replacement traffic can write", async () => {
