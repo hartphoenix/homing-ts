@@ -53,6 +53,9 @@ export const users = pgTable(
     email: varchar("email", { length: 254 }).notNull(),
     passwordHash: text("password_hash").notNull(),
     passwordResetRequired: boolean("password_reset_required").notNull().default(false),
+    lastLogin: timestamp("last_login", { withTimezone: true }),
+    legacyIsStaff: boolean("legacy_is_staff").notNull().default(false),
+    legacyIsSuperuser: boolean("legacy_is_superuser").notNull().default(false),
     isActive: boolean("is_active").notNull().default(true),
     ...timestamps,
   },
@@ -70,6 +73,20 @@ export const profiles = pgTable("profiles", {
   agentPausedUntil: timestamp("agent_paused_until", { withTimezone: true }),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+export const savedPrompts = pgTable(
+  "saved_prompts",
+  {
+    id: bigint("id", { mode: "number" }).primaryKey().generatedByDefaultAsIdentity(),
+    userId: bigint("user_id", { mode: "number" })
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    title: varchar("title", { length: 200 }).notNull(),
+    prompt: text("prompt").notNull(),
+    ...timestamps,
+  },
+  (table) => [uniqueIndex("saved_prompts_user_title_uniq").on(table.userId, table.title)],
+);
 
 export const sessions = pgTable(
   "sessions",
@@ -233,11 +250,12 @@ export const searchRuns = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: "restrict" }),
     tokenId: uuid("token_id").references(() => agentTokens.id, { onDelete: "set null" }),
-    agentLabel: varchar("agent_label", { length: 120 }).notNull(),
+    agentLabel: varchar("agent_label", { length: 160 }).notNull(),
     promptRevision: integer("prompt_revision").notNull(),
     promptSnapshot: text("prompt_snapshot").notNull(),
     criteriaSnapshot: jsonb("criteria_snapshot").$type<Record<string, unknown>>().notNull(),
     status: runStatus("status").notNull().default("queued"),
+    startedAt: timestamp("started_at", { withTimezone: true }),
     leaseOwner: varchar("lease_owner", { length: 120 }).notNull().default(""),
     leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
     claimTokenDigest: varchar("claim_token_digest", { length: 64 }).notNull().default(""),
@@ -246,7 +264,7 @@ export const searchRuns = pgTable(
     outputCursor: varchar("output_cursor", { length: 2000 }).notNull().default(""),
     continuation: jsonb("continuation").$type<Record<string, unknown>>().notNull().default({}),
     resultCounts: jsonb("result_counts").$type<Record<string, number>>().notNull().default({}),
-    summary: varchar("summary", { length: 1000 }).notNull().default(""),
+    summary: text("summary").notNull().default(""),
     idempotencyKey: varchar("idempotency_key", { length: 200 }).notNull().default(""),
     completedAt: timestamp("completed_at", { withTimezone: true }),
     ...timestamps,
@@ -375,6 +393,9 @@ export const sourcePlanReviews = pgTable(
     reportedByTokenId: uuid("reported_by_token_id").references(() => agentTokens.id, {
       onDelete: "set null",
     }),
+    resolvedByTokenId: uuid("resolved_by_token_id").references(() => agentTokens.id, {
+      onDelete: "set null",
+    }),
     status: sourceReviewStatus("status").notNull().default("open"),
     observedPromptRevision: integer("observed_prompt_revision").notNull(),
     resolvedPromptRevision: integer("resolved_prompt_revision"),
@@ -427,7 +448,7 @@ export const auditEvents = pgTable("audit_events", {
     onDelete: "set null",
   }),
   tokenId: uuid("token_id").references(() => agentTokens.id, { onDelete: "set null" }),
-  requestId: varchar("request_id", { length: 80 }).notNull().default(""),
+  requestId: varchar("request_id", { length: 100 }).notNull().default(""),
   summary: jsonb("summary").$type<Record<string, unknown>>().notNull().default({}),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });

@@ -1,6 +1,6 @@
 # Functional acceptance matrix
 
-The compact replacement suite targets 71 behavioral scenarios. Parameterization may combine cases,
+The compact replacement suite targets 79 behavioral scenarios. Parameterization may combine cases,
 so test-file count is not normative. Every scenario maps to a security invariant, a browser journey,
 or the unchanged Python client. The legacy Django suite is evidence only.
 
@@ -93,3 +93,24 @@ or the unchanged Python client. The legacy Django suite is evidence only.
 69. Profile and server-side agent pause state update and rehydrate.
 70. Agent setup supports link approval/denial plus manual token creation and revocation.
 71. Source-plan review banner shows count, state, and server-authored copyable repair guidance.
+
+## Complete Django migration — 8
+
+72. Every Django user/profile and password hash migrates with stable IDs, normalized email,
+    active state, last login, profile state, and nonauthorizing legacy staff metadata; cutover
+    rejects an active account whose password format the replacement cannot verify.
+73. Every project, membership role, invitation record, prompt revision, and saved prompt migrates
+    with stable identifiers and timestamps.
+74. Completed/failed run history, leads including trash state, interests, threaded comments,
+    source-plan reviews, and audit events migrate without content loss.
+75. Browser sessions, auth throttles, agent tokens/links, idempotency rows, token references, and
+    legacy change-feed rows do not cross the deployment trust boundary.
+76. Every run drops token references, claims, leases, and idempotency state; active runs additionally
+    become cancelled history, and pending invitations are revoked with tombstoned digests for
+    explicit reissue.
+77. Source validation rejects missing references/profiles/owners, prompt gaps, comment cycles,
+    unsafe identifiers/bounds, and collisions under the replacement URL normalizer.
+78. Import requires an empty target, writes transactionally, proves exact canonical target-derived
+    counts/checksum before recording completion, and safely replays only the identical source.
+79. Independent post-import validation rereads frozen Django and TypeScript databases and rejects
+    any count, checksum, migration-record, session, password-marker, or feed-epoch mismatch.

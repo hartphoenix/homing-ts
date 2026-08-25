@@ -1,0 +1,4 @@
+services:
+  web:
+    ports:
+      - "127.0.0.1:${HOMING_PRIVATE_WEB_PORT:-18000}:8000"

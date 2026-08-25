@@ -21,6 +21,17 @@ command -v age >/dev/null 2>&1 || { echo "age is required" >&2; exit 1; }
 command -v docker >/dev/null 2>&1 || { echo "docker is required" >&2; exit 1; }
 command -v python3 >/dev/null 2>&1 || { echo "python3 is required" >&2; exit 1; }
 
+docker_context=${HOMING_DOCKER_CONTEXT:-default}
+case "$docker_context" in
+  ""|*[!A-Za-z0-9_.-]*)
+    echo "HOMING_DOCKER_CONTEXT contains unsupported characters" >&2
+    exit 1
+    ;;
+esac
+docker_cmd() {
+  docker --context "$docker_context" "$@"
+}
+
 age_identity_file=${AGE_IDENTITY_FILE:-}
 if [ -z "$age_identity_file" ]; then
   age_identity_file=$(awk '
@@ -72,27 +83,26 @@ read_env_value() {
   ' "$env_file"
 }
 
-compose_project_name=${COMPOSE_PROJECT_NAME:-$(read_env_value COMPOSE_PROJECT_NAME)}
+compose_project_name=${HOMING_COMPOSE_PROJECT_NAME:-$(read_env_value COMPOSE_PROJECT_NAME)}
+compose_project_name=${compose_project_name:-homing-ts}
+case "$compose_project_name" in
+  *[!A-Za-z0-9_-]*|"")
+    echo "COMPOSE_PROJECT_NAME must contain only letters, digits, underscores, and hyphens" >&2
+    exit 1
+    ;;
+esac
 
 compose() {
-  if [ -n "$compose_project_name" ]; then
-    docker compose -f "$compose_file" -p "$compose_project_name" --env-file "$env_file" "$@"
-  else
-    docker compose -f "$compose_file" --env-file "$env_file" "$@"
-  fi
+  docker_cmd compose -f "$compose_file" -p "$compose_project_name" --env-file "$env_file" "$@"
 }
 
 run_archive_checker() {
   fifo=$1
   shift
-  if [ -n "$compose_project_name" ]; then
-    python3 "$script_dir/stream_archive.py" "$fifo" \
-      docker compose -f "$compose_file" -p "$compose_project_name" --env-file "$env_file" \
-      exec --no-TTY db "$@"
-  else
-    python3 "$script_dir/stream_archive.py" "$fifo" \
-      docker compose -f "$compose_file" --env-file "$env_file" exec --no-TTY db "$@"
-  fi
+  python3 "$script_dir/stream_archive.py" "$fifo" \
+    docker --context "$docker_context" compose -f "$compose_file" -p "$compose_project_name" \
+    --env-file "$env_file" \
+    exec --no-TTY db "$@"
 }
 
 tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/homing-restore.XXXXXX")
@@ -155,4 +165,5 @@ fi
 # only the migration role for schema changes. Provisioning is idempotent.
 compose run --rm --no-deps provision
 compose run --rm --no-deps migrate
+compose run --rm --no-deps harden
 echo "restore completed; web and Caddy remain stopped for explicit private verification" >&2

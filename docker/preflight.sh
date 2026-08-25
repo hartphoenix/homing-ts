@@ -193,10 +193,14 @@ postgres_app_password = os.environ["PREFLIGHT_POSTGRES_APP_PASSWORD"]
 postgres_migration_user = os.environ["PREFLIGHT_POSTGRES_MIGRATION_USER"]
 postgres_migration_password = os.environ["PREFLIGHT_POSTGRES_MIGRATION_PASSWORD"]
 
-for label, image in images.items():
-    if not re.fullmatch(r"[^@\s]+@sha256:[0-9a-f]{64}", image):
+if not re.fullmatch(r"(?:[^@\s]+@)?sha256:[0-9a-f]{64}", images["HOMING_IMAGE"]):
+    raise SystemExit(
+        "HOMING_IMAGE must be a local content-addressed image ID or a registry digest"
+    )
+for label in ("POSTGRES_IMAGE", "CADDY_IMAGE"):
+    if not re.fullmatch(r"[^@\s]+@sha256:[0-9a-f]{64}", images[label]):
         raise SystemExit(
-            f"{label} must be an immutable image reference ending in @sha256:<64 lowercase hex>"
+            f"{label} must be an immutable registry reference ending in @sha256:<64 lowercase hex>"
         )
 
 if "://" in app_domain or "/" in app_domain or any(char.isspace() for char in app_domain):

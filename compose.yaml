@@ -61,6 +61,21 @@ services:
     cap_drop: [ALL]
     command: ["bun", "run", "db:migrate"]
 
+  harden:
+    image: ${POSTGRES_IMAGE:?set POSTGRES_IMAGE to a pinned PostgreSQL image}
+    restart: "no"
+    init: true
+    environment:
+      DATABASE_ADMIN_URL: ${DATABASE_ADMIN_URL:?set DATABASE_ADMIN_URL}
+      POSTGRES_APP_USER: ${POSTGRES_APP_USER:?set POSTGRES_APP_USER}
+    volumes:
+      - ./docker/harden-runtime-role.sh:/usr/local/bin/homing-harden-runtime-role:ro
+    networks: [database]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    command: ["/usr/local/bin/homing-harden-runtime-role"]
+
   web:
     image: ${HOMING_IMAGE:?set HOMING_IMAGE to the immutable release image}
     restart: unless-stopped
@@ -75,7 +90,7 @@ services:
     expose: ["8000"]
     networks: [edge, database]
     depends_on:
-      migrate:
+      harden:
         condition: service_completed_successfully
     read_only: true
     tmpfs:

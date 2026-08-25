@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { once } from "node:events";
 import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
@@ -16,6 +17,7 @@ import {
 } from "../../src/server/agent/postgres-repository";
 import { type AgentPrincipal, digest, RunService } from "../../src/server/agent/runs";
 import { DrizzleAuthRepository } from "../../src/server/auth/drizzle-repository";
+import { verifyImportedPassword } from "../../src/server/auth/password";
 import { PostgresCollaborationRepository } from "../../src/server/collaboration/postgres-repository";
 import * as schema from "../../src/server/db/schema";
 
@@ -56,7 +58,9 @@ describePostgres("PostgreSQL concurrency invariants", () => {
   });
 
   beforeEach(async () => {
-    await sqlClient`truncate table migration_records, users restart identity cascade`;
+    await sqlClient`
+      truncate table migration_records, users, auth_throttles, sessions restart identity cascade
+    `;
     await sqlClient`
       insert into users (id, email, password_hash)
       values (1, 'one@example.test', 'test-only'), (2, 'two@example.test', 'test-only')
@@ -515,8 +519,12 @@ describePostgres("PostgreSQL concurrency invariants", () => {
     });
   });
 
-  it("imports the frozen Django project transactionally and validates fresh credential state", async () => {
+  it("imports complete frozen Django access and project state with authority rotated", async () => {
     const migrationProjectId = "55555555-5555-4555-8555-555555555555";
+    const secondProjectId = "66666666-6666-4666-8666-666666666666";
+    const activeLeadId = "77777777-7777-4777-8777-777777777777";
+    const trashedLeadId = "88888888-8888-4888-8888-888888888888";
+    const rotatedTokenId = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
     await sqlClient`truncate table migration_records, users restart identity cascade`;
     await sqlClient`drop schema if exists django_source cascade`;
     await sqlClient`create schema django_source`;
@@ -526,11 +534,28 @@ describePostgres("PostgreSQL concurrency invariants", () => {
           id bigint primary key,
           email varchar(254) not null,
           password text not null,
+          last_login timestamptz,
+          is_staff boolean not null,
+          is_superuser boolean not null,
           is_active boolean not null,
           date_joined timestamptz not null,
           updated_at timestamptz not null
         )
       `;
+      await sqlClient`
+        create table django_source.accounts_savedprompt (
+          id bigint primary key,
+          user_id bigint not null,
+          title varchar(200) not null,
+          prompt text not null,
+          created_at timestamptz not null,
+          updated_at timestamptz not null
+        )
+      `;
+      await sqlClient`create table django_source.accounts_agenttoken (id uuid primary key)`;
+      await sqlClient`create table django_source.accounts_agentlink (id uuid primary key)`;
+      await sqlClient`create table django_source.accounts_auththrottle (id bigint primary key)`;
+      await sqlClient`create table django_source.django_session (session_key varchar(40) primary key)`;
       await sqlClient`
         create table django_source.accounts_profile (
           user_id bigint primary key,
@@ -567,6 +592,7 @@ describePostgres("PostgreSQL concurrency invariants", () => {
       `;
       await sqlClient`
         create table django_source.projects_promptrevision (
+          id bigint primary key,
           project_id uuid not null,
           revision integer not null,
           prompt text not null,
@@ -576,22 +602,167 @@ describePostgres("PostgreSQL concurrency invariants", () => {
         )
       `;
       await sqlClient`
+        create table django_source.projects_projectinvitation (
+          id uuid primary key,
+          project_id uuid not null,
+          invited_email varchar(254) not null,
+          role varchar(16) not null,
+          inviter_id bigint not null,
+          token_digest varchar(64) not null,
+          expires_at timestamptz not null,
+          accepted_at timestamptz,
+          revoked_at timestamptz,
+          created_at timestamptz not null
+        )
+      `;
+      await sqlClient`
+        create table django_source.projects_searchrun (
+          id uuid primary key,
+          project_id uuid not null,
+          user_id bigint not null,
+          agent_token_id uuid,
+          agent_label varchar(160) not null,
+          prompt_revision integer not null,
+          prompt_snapshot text not null,
+          criteria_snapshot jsonb not null,
+          status varchar(16) not null,
+          lease_owner varchar(160) not null,
+          lease_expires_at timestamptz,
+          claim_token varchar(64) not null,
+          attempt_count integer not null,
+          input_cursor varchar(500) not null,
+          output_cursor varchar(500) not null,
+          continuation jsonb not null,
+          result_counts jsonb not null,
+          summary text not null,
+          idempotency_key varchar(200) not null,
+          created_at timestamptz not null,
+          started_at timestamptz,
+          completed_at timestamptz,
+          updated_at timestamptz not null
+        )
+      `;
+      await sqlClient`
+        create table django_source.projects_lead (
+          id uuid primary key,
+          project_id uuid not null,
+          source varchar(160) not null,
+          source_listing_id varchar(200) not null,
+          canonical_url varchar(2000) not null,
+          identity_hash varchar(64) not null,
+          source_url varchar(2000) not null,
+          title varchar(500) not null,
+          summary text not null,
+          location varchar(500) not null,
+          price_display varchar(120) not null,
+          price_amount numeric(10,2),
+          price_currency varchar(3) not null,
+          availability varchar(500) not null,
+          housing_type varchar(16) not null,
+          date_confidence varchar(16) not null,
+          park_notes varchar(1000) not null,
+          attributes jsonb not null,
+          verification_notes text not null,
+          status varchar(16) not null,
+          trashed_by_id bigint,
+          trashed_at timestamptz,
+          creator_id bigint not null,
+          revision integer not null,
+          created_at timestamptz not null,
+          updated_at timestamptz not null
+        )
+      `;
+      await sqlClient`
+        create table django_source.projects_leadinterest (
+          lead_id uuid not null,
+          user_id bigint not null,
+          created_at timestamptz not null
+        )
+      `;
+      await sqlClient`
+        create table django_source.projects_leadcomment (
+          id bigint primary key,
+          lead_id uuid not null,
+          author_id bigint not null,
+          parent_id bigint,
+          body text not null,
+          created_at timestamptz not null,
+          edited_at timestamptz,
+          deleted_at timestamptz
+        )
+      `;
+      await sqlClient`
+        create table django_source.projects_sourceplanreview (
+          id uuid primary key,
+          project_id uuid not null,
+          user_id bigint not null,
+          reporting_agent_token_id uuid,
+          resolving_agent_token_id uuid,
+          status varchar(16) not null,
+          observed_prompt_revision integer not null,
+          resolved_prompt_revision integer,
+          opened_at timestamptz not null,
+          last_reported_at timestamptz not null,
+          resolved_at timestamptz
+        )
+      `;
+      await sqlClient`
+        create table django_source.projects_auditevent (
+          id bigint primary key,
+          project_id uuid,
+          action varchar(100) not null,
+          object_type varchar(80) not null,
+          object_id varchar(100) not null,
+          actor_kind varchar(24) not null,
+          actor_id bigint,
+          token_id uuid,
+          request_id varchar(100) not null,
+          summary jsonb not null,
+          created_at timestamptz not null
+        )
+      `;
+      await sqlClient`create table django_source.projects_idempotencykey (id bigint primary key)`;
+      await sqlClient`create table django_source.projects_projectchange (id bigint primary key)`;
+      await sqlClient`insert into django_source.accounts_agenttoken values (${rotatedTokenId})`;
+      await sqlClient`
+        insert into django_source.accounts_agentlink
+        values ('ffffffff-ffff-4fff-8fff-ffffffffffff')
+      `;
+      await sqlClient`insert into django_source.accounts_auththrottle values (1)`;
+      await sqlClient`
+        insert into django_source.django_session values ('migration-session-marker')
+      `;
+      await sqlClient`insert into django_source.projects_idempotencykey values (1)`;
+      await sqlClient`insert into django_source.projects_projectchange values (1)`;
+      await sqlClient`
         insert into django_source.accounts_user
-          (id, email, password, is_active, date_joined, updated_at)
+          (id, email, password, last_login, is_staff, is_superuser, is_active, date_joined, updated_at)
         values
-          (7, 'HART@example.test', ${argon2Fixture}, true,
+          (7, 'HART@example.test', ${argon2Fixture}, '2026-08-20T12:00:00Z', true, true, true,
            '2026-08-01T12:00:00Z', '2026-08-19T12:00:00Z'),
-          (9, 'partner@example.test', ${pbkdf2Fixture}, true,
-           '2026-08-02T12:00:00Z', '2026-08-19T12:00:00Z')
+          (9, 'partner@example.test', ${pbkdf2Fixture}, null, false, false, true,
+           '2026-08-02T12:00:00Z', '2026-08-19T12:00:00Z'),
+          (11, 'former@example.test', ${argon2Fixture}, null, false, false, true,
+           '2026-08-03T12:00:00Z', '2026-08-19T12:00:00Z')
       `;
       await sqlClient`
         insert into django_source.accounts_profile
           (user_id, display_name, timezone, bio, personal_details, agent_paused_until, updated_at)
         values
           (7, 'Hart', 'America/New_York', 'Builder',
-           ${JSON.stringify({ housing: "current" })}::jsonb, null, '2026-08-19T12:00:00Z'),
+           '{"exact":900719925474099312345,"housing":"current"}'::jsonb, null,
+           '2026-08-19T12:00:00.123456Z'),
           (9, 'Partner', 'America/New_York', '', '{}'::jsonb,
-           '2026-08-22T12:00:00Z', '2026-08-19T12:00:00Z')
+           '2026-08-22T12:00:00Z', '2026-08-19T12:00:00Z'),
+          (11, 'Former member', 'UTC', 'Archived author', '{}'::jsonb,
+           null, '2026-08-19T12:00:00Z')
+      `;
+      await sqlClient`
+        insert into django_source.accounts_savedprompt
+          (id, user_id, title, prompt, created_at, updated_at)
+        values
+          (15, 11, 'Archived prompt', 'Keep this user-authored content',
+           '2026-08-05T12:00:00Z', '2026-08-06T12:00:00Z')
       `;
       await sqlClient`
         insert into django_source.projects_project
@@ -600,21 +771,110 @@ describePostgres("PostgreSQL concurrency invariants", () => {
         values
           (${migrationProjectId}, 'Imported Homing', 'imported-homing', 'Current shared search',
            'Use the current search brief', ${JSON.stringify({ borough: "Brooklyn" })}::jsonb,
-           'active', 3, 7, '2026-08-03T12:00:00Z', '2026-08-19T12:00:00Z')
+           'active', 3, 7, '2026-08-03T12:00:00Z', '2026-08-19T12:00:00Z'),
+          (${secondProjectId}, 'Second search', 'second-search', 'Another intact project',
+           'Second project brief', ${JSON.stringify({ borough: "Queens" })}::jsonb,
+           'active', 1, 11, '2026-08-04T12:00:00Z', '2026-08-20T12:00:00Z')
       `;
       await sqlClient`
         insert into django_source.projects_projectmembership
           (project_id, user_id, role, joined_at)
         values
           (${migrationProjectId}, 7, 'owner', '2026-08-03T12:00:00Z'),
-          (${migrationProjectId}, 9, 'editor', '2026-08-04T12:00:00Z')
+          (${migrationProjectId}, 9, 'editor', '2026-08-04T12:00:00Z'),
+          (${secondProjectId}, 11, 'owner', '2026-08-04T12:00:00Z'),
+          (${secondProjectId}, 7, 'viewer', '2026-08-05T12:00:00Z')
       `;
       await sqlClient`
         insert into django_source.projects_promptrevision
-          (project_id, revision, prompt, criteria, editor_id, created_at)
+          (id, project_id, revision, prompt, criteria, editor_id, created_at)
         values
-          (${migrationProjectId}, 3, 'Use the current search brief',
-           ${JSON.stringify({ borough: "Brooklyn" })}::jsonb, 7, '2026-08-19T12:00:00Z')
+          (31, ${migrationProjectId}, 1, 'Initial brief', '{}'::jsonb, 7, '2026-08-03T12:00:00Z'),
+          (32, ${migrationProjectId}, 2, 'Refined brief', '{}'::jsonb, 9, '2026-08-10T12:00:00Z'),
+          (33, ${migrationProjectId}, 3, 'Use the current search brief',
+           ${JSON.stringify({ borough: "Brooklyn" })}::jsonb, 7, '2026-08-19T12:00:00Z'),
+          (34, ${secondProjectId}, 1, 'Second project brief',
+           ${JSON.stringify({ borough: "Queens" })}::jsonb, 11, '2026-08-20T12:00:00Z')
+      `;
+      await sqlClient`
+        insert into django_source.projects_projectinvitation
+          (id, project_id, invited_email, role, inviter_id, token_digest, expires_at,
+           accepted_at, revoked_at, created_at)
+        values
+          ('99999999-9999-4999-8999-999999999999', ${migrationProjectId},
+           'invitee@example.test', 'viewer', 7, ${"a".repeat(64)}, '2026-09-10T12:00:00Z',
+           null, null, '2026-08-20T12:00:00Z')
+      `;
+      await sqlClient`
+        insert into django_source.projects_searchrun
+          (id, project_id, user_id, agent_token_id, agent_label, prompt_revision, prompt_snapshot,
+           criteria_snapshot, status, lease_owner, lease_expires_at, claim_token, attempt_count,
+           input_cursor, output_cursor, continuation, result_counts, summary, idempotency_key,
+           created_at, started_at, completed_at, updated_at)
+        values
+          ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', ${migrationProjectId}, 7,
+           ${rotatedTokenId}, 'legacy-agent',
+           3, 'Use the current search brief', ${JSON.stringify({ borough: "Brooklyn" })}::jsonb,
+           'completed', '', null, '', 1, 'in', 'out', '{}'::jsonb,
+           ${JSON.stringify({ created: 1 })}::jsonb, 'Completed intact', 'completed-key',
+           '2026-08-20T12:00:00Z', '2026-08-20T12:01:00Z', '2026-08-20T12:02:00Z',
+           '2026-08-20T12:02:00Z'),
+          ('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', ${secondProjectId}, 11, null, 'stale-agent',
+           1, 'Second project brief', ${JSON.stringify({ borough: "Queens" })}::jsonb,
+           'running', 'old-worker', '2026-08-21T12:00:00Z', 'raw-claim', 2, '', '', '{}'::jsonb,
+           '{}'::jsonb, 'Interrupted at cutover', 'unsafe-key', '2026-08-20T13:00:00Z',
+           '2026-08-20T13:01:00Z', null, '2026-08-20T13:01:00Z')
+      `;
+      await sqlClient`
+        insert into django_source.projects_lead
+          (id, project_id, source, source_listing_id, canonical_url, identity_hash, source_url,
+           title, summary, location, price_display, price_amount, price_currency, availability,
+           housing_type, date_confidence, park_notes, attributes, verification_notes, status,
+           trashed_by_id, trashed_at, creator_id, revision, created_at, updated_at)
+        values
+          (${activeLeadId}, ${migrationProjectId}, 'fixture', 'listing-1',
+           'https://EXAMPLE.test/place?utm_source=old&b=2&a=1', ${"b".repeat(64)}, '',
+           'Active imported lead', 'Complete lead content', 'Brooklyn', '$1,500', 1500, 'USD',
+           'September', 'shared', 'strong', '', ${JSON.stringify({ bedrooms: 2 })}::jsonb,
+           'Verified', 'active', null, null, 7, 4, '2026-08-20T12:00:00Z',
+           '2026-08-21T12:00:00Z'),
+          (${trashedLeadId}, ${secondProjectId}, 'fixture', 'listing-2',
+           'https://example.test/other', ${"c".repeat(64)}, 'https://example.test/source',
+           'Trashed imported lead', '', 'Queens', '$1,200', 1200, 'USD', 'Now', 'entire',
+           'verify', 'Near park', '{}'::jsonb, '', 'trashed', 11, '2026-08-22T12:00:00Z',
+           11, 2, '2026-08-20T12:00:00Z', '2026-08-22T12:00:00Z')
+      `;
+      await sqlClient`
+        insert into django_source.projects_leadinterest (lead_id, user_id, created_at)
+        values (${activeLeadId}, 9, '2026-08-21T13:00:00Z')
+      `;
+      await sqlClient`
+        insert into django_source.projects_leadcomment
+          (id, lead_id, author_id, parent_id, body, created_at, edited_at, deleted_at)
+        values
+          (41, ${activeLeadId}, 9, null, 'Parent comment', '2026-08-21T14:00:00Z', null, null),
+          (42, ${activeLeadId}, 11, 41, 'Reply from former user', '2026-08-21T15:00:00Z',
+           '2026-08-21T16:00:00Z', null)
+      `;
+      await sqlClient`
+        insert into django_source.projects_sourceplanreview
+          (id, project_id, user_id, reporting_agent_token_id, resolving_agent_token_id, status,
+           observed_prompt_revision, resolved_prompt_revision, opened_at, last_reported_at, resolved_at)
+        values
+          ('cccccccc-cccc-4ccc-8ccc-cccccccccccc', ${migrationProjectId}, 7,
+           ${rotatedTokenId}, ${rotatedTokenId},
+           'resolved', 2, 3, '2026-08-18T12:00:00Z', '2026-08-19T12:00:00Z',
+           '2026-08-19T13:00:00Z')
+      `;
+      await sqlClient`
+        insert into django_source.projects_auditevent
+          (id, project_id, action, object_type, object_id, actor_kind, actor_id, token_id,
+           request_id, summary, created_at)
+        values
+          (51, ${migrationProjectId}, 'lead.updated', 'lead', ${activeLeadId}, 'user', 9,
+           ${rotatedTokenId},
+           'dddddddd-dddd-4ddd-8ddd-dddddddddddd', ${JSON.stringify({ revision: 4 })}::jsonb,
+           '2026-08-21T12:00:00Z')
       `;
 
       const sourceUrl = new URL(databaseUrl as string);
@@ -626,7 +886,7 @@ describePostgres("PostgreSQL concurrency invariants", () => {
             ...process.env,
             DATABASE_URL: databaseUrl as string,
             DJANGO_DATABASE_URL: sourceUrl.toString(),
-            MIGRATE_PROJECT_ID: migrationProjectId,
+            MIGRATION_CUTOVER_AT: "2026-08-25T04:00:00Z",
             PUBLIC_ORIGIN: "http://127.0.0.1:8000",
             AUTH_THROTTLE_KEY: "homing-migration-integration-test-key",
             NODE_ENV: "test",
@@ -648,42 +908,147 @@ describePostgres("PostgreSQL concurrency invariants", () => {
         return { stdout, stderr };
       };
 
+      await sqlClient`
+        insert into auth_throttles
+          (key_digest, failure_count, window_started_at, updated_at)
+        values (${"f".repeat(64)}, 0, now(), now())
+      `;
+      const nonemptyTarget = await runScript("src/server/db/import-django.ts", false);
+      expect(nonemptyTarget.stderr).toContain(
+        "Every target application table must be empty before the Django import",
+      );
+      await sqlClient`delete from auth_throttles where key_digest = ${"f".repeat(64)}`;
+
       const imported = await runScript("src/server/db/import-django.ts");
-      expect(imported.stdout).toContain('"event":"source_password_algorithms"');
+      expect(imported.stdout).toContain('"event":"source_password_support"');
       expect(imported.stdout).toContain('"event":"migration_complete"');
+      expect(imported.stdout).not.toContain("migration-session-marker");
+      expect(imported.stdout).not.toContain(rotatedTokenId);
+      const migrationEvent = imported.stdout
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+        .find((event) => event.event === "migration_complete");
+      expect(migrationEvent?.authority_rotation).toEqual({
+        active_runs_cancelled: 1,
+        agent_links: 1,
+        agent_tokens: 1,
+        auth_throttles: 1,
+        browser_sessions: 1,
+        idempotency_keys: 1,
+        pending_invitations_reissue: 1,
+        project_changes: 1,
+      });
       const [state] = await sqlClient<
         Array<{
+          audit_total: string;
+          cancelled_run_total: string;
           change_total: string;
-          feed_epoch: string;
-          latest_change_sequence: string;
-          member_total: string;
-          profile_total: string;
+          comment_total: string;
+          invitation_total: string;
+          invitation_rotated: boolean;
+          interest_total: string;
+          idempotency_total: string;
+          identity_recomputed: boolean;
+          json_exact: boolean;
+          lead_total: string;
+          link_total: string;
+          live_claim_total: string;
+          migration_total: string;
+          pending_invitation_total: string;
+          project_total: string;
+          review_total: string;
+          run_total: string;
+          saved_prompt_total: string;
+          session_total: string;
+          timestamp_exact: boolean;
+          throttle_total: string;
+          token_reference_total: string;
           token_total: string;
-          user_ids: string[];
+          user_total: string;
         }>
       >`
-        select project.feed_epoch,
-               project.latest_change_sequence::text,
-               (select count(*)::text from project_changes where project_id = project.id) as change_total,
-               (select count(*)::text from project_memberships where project_id = project.id) as member_total,
-               (select count(*)::text from profiles profile
-                 join project_memberships member on member.user_id = profile.user_id
-                where member.project_id = project.id) as profile_total,
-               (select count(*)::text from agent_tokens) as token_total,
-               (select array_agg(member.user_id order by member.user_id)
-                  from project_memberships member where member.project_id = project.id) as user_ids
-          from projects project
-         where project.id = ${migrationProjectId}
+        select
+          (select count(*)::text from users) as user_total,
+          (select count(*)::text from projects) as project_total,
+          (select count(*)::text from saved_prompts) as saved_prompt_total,
+          (select count(*)::text from project_invitations) as invitation_total,
+          (select token_digest = 'legacy:99999999999949998999999999999999' and
+                  revoked_at = '2026-08-25T04:00:00Z'::timestamptz
+             from project_invitations where id = '99999999-9999-4999-8999-999999999999')
+            as invitation_rotated,
+          (select count(*)::text from project_invitations
+            where accepted_at is null and revoked_at is null and expires_at > '2026-08-25T04:00:00Z')
+            as pending_invitation_total,
+          (select count(*)::text from search_runs) as run_total,
+          (select count(*)::text from search_runs where status = 'cancelled') as cancelled_run_total,
+          (select count(*)::text from search_runs
+            where token_id is not null or claim_token_digest <> '' or lease_owner <> '' or
+                  lease_expires_at is not null or idempotency_key <> '') as live_claim_total,
+          (select count(*)::text from leads) as lead_total,
+          (select count(*)::text from lead_interests) as interest_total,
+          (select count(*)::text from lead_comments) as comment_total,
+          (select count(*)::text from source_plan_reviews) as review_total,
+          (select count(*)::text from audit_events) as audit_total,
+          (select count(*)::text from agent_tokens) as token_total,
+          (select count(*)::text from agent_links) as link_total,
+          (select count(*)::text from auth_throttles) as throttle_total,
+          (select count(*)::text from sessions) as session_total,
+          (select count(*)::text from idempotency_keys) as idempotency_total,
+          ((select count(*) from search_runs where token_id is not null) +
+          (select count(*) from source_plan_reviews
+            where reported_by_token_id is not null or resolved_by_token_id is not null) +
+          (select count(*) from audit_events where token_id is not null))::text
+            as token_reference_total,
+          (select count(*)::text from project_changes) as change_total,
+          (select count(*)::text from migration_records) as migration_total,
+          (select personal_details::text from profiles where user_id = 7) =
+          (select personal_details::text from django_source.accounts_profile where user_id = 7)
+            as json_exact,
+          (select updated_at from profiles where user_id = 7) =
+          (select updated_at from django_source.accounts_profile where user_id = 7)
+            as timestamp_exact,
+          (select identity_hash from leads where id = ${activeLeadId}) =
+          ${createHash("sha256")
+            .update("https://example.test/place?a=1&b=2")
+            .digest("hex")} as identity_recomputed
       `;
       expect(state).toEqual({
+        audit_total: "1",
+        cancelled_run_total: "1",
         change_total: "0",
-        feed_epoch: expect.stringMatching(/^[a-f0-9]{32}$/),
-        latest_change_sequence: "0",
-        member_total: "2",
-        profile_total: "2",
+        comment_total: "2",
+        invitation_total: "1",
+        invitation_rotated: true,
+        interest_total: "1",
+        idempotency_total: "0",
+        identity_recomputed: true,
+        json_exact: true,
+        lead_total: "2",
+        link_total: "0",
+        live_claim_total: "0",
+        migration_total: "2",
+        pending_invitation_total: "0",
+        project_total: "2",
+        review_total: "1",
+        run_total: "2",
+        saved_prompt_total: "1",
+        session_total: "0",
+        timestamp_exact: true,
+        throttle_total: "0",
+        token_reference_total: "0",
         token_total: "0",
-        user_ids: ["7", "9"],
+        user_total: "3",
       });
+      const [importedLogin] = await sqlClient<
+        { password_hash: string; password_reset_required: boolean }[]
+      >`
+        select password_hash, password_reset_required from users where id = 9
+      `;
+      expect(importedLogin?.password_reset_required).toBe(false);
+      expect(
+        await verifyImportedPassword("fixture password", importedLogin?.password_hash ?? ""),
+      ).toMatchObject({ valid: true });
       const validated = await runScript("src/server/db/validate-import.ts");
       expect(validated.stdout).toContain('"valid":true');
 
@@ -693,11 +1058,29 @@ describePostgres("PostgreSQL concurrency invariants", () => {
       expect(replayed.stdout).toContain(`"target_checksum":"${checksum}"`);
 
       await sqlClient`
-        update django_source.projects_project set prompt = 'Source changed after freeze'
+        update projects set description = 'Target changed after import'
+         where id = ${migrationProjectId}
+      `;
+      const targetChanged = await runScript("src/server/db/import-django.ts", false);
+      expect(targetChanged.stderr).toContain("Target changed after the recorded import");
+      await sqlClient`
+        update projects set description = 'Current shared search'
+         where id = ${migrationProjectId}
+      `;
+
+      await sqlClient`update users set password_reset_required = true where id = 7`;
+      const loginMarkerChanged = await runScript("src/server/db/validate-import.ts", false);
+      expect(loginMarkerChanged.stderr).toContain(
+        "Password reset marker does not match runtime hash support",
+      );
+      await sqlClient`update users set password_reset_required = false where id = 7`;
+
+      await sqlClient`
+        update django_source.projects_project set description = 'Source changed after freeze'
          where id = ${migrationProjectId}
       `;
       const changed = await runScript("src/server/db/import-django.ts", false);
-      expect(changed.stderr).toContain("Source changed after the recorded import");
+      expect(changed.stderr).toContain("Recorded import does not match the complete frozen source");
     } finally {
       await sqlClient`drop schema if exists django_source cascade`;
     }
