@@ -5,6 +5,7 @@ umask 077
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 project_dir=${PROJECT_DIR:-"$script_dir/.."}
 env_file=${HOMING_ENV_FILE:-"$project_dir/.env"}
+compose_file="$project_dir/compose.yaml"
 backup=${1:-}
 if [ -z "$backup" ] || [ ! -f "$backup" ]; then
   echo "usage: $0 /absolute/path/to/homing-ts-<timestamp>.dump.age" >&2
@@ -15,6 +16,7 @@ if [ "${RESTORE_CONFIRM:-}" != "YES" ]; then
   exit 1
 fi
 test -f "$env_file" || { echo "missing environment file: $env_file" >&2; exit 1; }
+test -f "$compose_file" || { echo "missing Compose file: $compose_file" >&2; exit 1; }
 command -v age >/dev/null 2>&1 || { echo "age is required" >&2; exit 1; }
 command -v docker >/dev/null 2>&1 || { echo "docker is required" >&2; exit 1; }
 command -v python3 >/dev/null 2>&1 || { echo "python3 is required" >&2; exit 1; }
@@ -74,9 +76,9 @@ compose_project_name=${COMPOSE_PROJECT_NAME:-$(read_env_value COMPOSE_PROJECT_NA
 
 compose() {
   if [ -n "$compose_project_name" ]; then
-    docker compose -p "$compose_project_name" --env-file "$env_file" "$@"
+    docker compose -f "$compose_file" -p "$compose_project_name" --env-file "$env_file" "$@"
   else
-    docker compose --env-file "$env_file" "$@"
+    docker compose -f "$compose_file" --env-file "$env_file" "$@"
   fi
 }
 
@@ -85,10 +87,11 @@ run_archive_checker() {
   shift
   if [ -n "$compose_project_name" ]; then
     python3 "$script_dir/stream_archive.py" "$fifo" \
-      docker compose -p "$compose_project_name" --env-file "$env_file" exec --no-TTY db "$@"
+      docker compose -f "$compose_file" -p "$compose_project_name" --env-file "$env_file" \
+      exec --no-TTY db "$@"
   else
     python3 "$script_dir/stream_archive.py" "$fifo" \
-      docker compose --env-file "$env_file" exec --no-TTY db "$@"
+      docker compose -f "$compose_file" --env-file "$env_file" exec --no-TTY db "$@"
   fi
 }
 

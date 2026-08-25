@@ -4,9 +4,11 @@ umask 077
 
 project_dir=${PROJECT_DIR:-"$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)"}
 env_file=${HOMING_ENV_FILE:-"$project_dir/.env"}
+compose_file="$project_dir/compose.yaml"
 timestamp=$(date -u +%Y%m%dT%H%M%SZ)
 
 test -f "$env_file" || { echo "missing environment file: $env_file" >&2; exit 1; }
+test -f "$compose_file" || { echo "missing Compose file: $compose_file" >&2; exit 1; }
 command -v python3 >/dev/null 2>&1 || { echo "python3 is required" >&2; exit 1; }
 python3 - "$env_file" <<'PY'
 import os
@@ -75,9 +77,9 @@ trap release_lock EXIT HUP INT TERM
 
 compose() {
   if [ -n "$compose_project_name" ]; then
-    docker compose -p "$compose_project_name" --env-file "$env_file" "$@"
+    docker compose -f "$compose_file" -p "$compose_project_name" --env-file "$env_file" "$@"
   else
-    docker compose --env-file "$env_file" "$@"
+    docker compose -f "$compose_file" --env-file "$env_file" "$@"
   fi
 }
 

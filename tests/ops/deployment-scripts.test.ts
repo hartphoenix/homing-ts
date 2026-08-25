@@ -97,6 +97,7 @@ function runScript(
         RESTORE_CONFIRM: "YES",
         HOMING_ENV_FILE: "",
         COMPOSE_PROJECT_NAME: "",
+        COMPOSE_FILE: "",
         HOMING_OPS_LOCK_DIR: "",
         APP_DOMAIN: "",
         PUBLIC_ORIGIN: "",
@@ -136,6 +137,7 @@ describe("deployment script failure paths", () => {
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), "homing-deployment-scripts-"));
     await writeFile(join(root, ".env"), "");
+    await writeFile(join(root, "compose.yaml"), "services: {}\n");
     await writeFile(join(root, "identity"), "test-only-identity\n");
     await chmod(join(root, "identity"), 0o600);
     await mkdir(join(root, "bin"));
@@ -283,11 +285,35 @@ describe("deployment script failure paths", () => {
     expect(compose).not.toContain("EDGE_NETWORK_NAME");
     expect(backup).toContain("HOMING_ENV_FILE");
     expect(restore).toContain("HOMING_ENV_FILE");
+    expect(backup).toContain('docker compose -f "$compose_file"');
+    expect(restore).toContain('docker compose -f "$compose_file"');
     expect(backup).toContain("read_env_value COMPOSE_PROJECT_NAME");
     expect(restore).toContain("read_env_value COMPOSE_PROJECT_NAME");
     expect(backup).toContain("backups/$backup_namespace");
     expect(backup).toContain("$backup_rclone_remote/$backup_namespace/");
     expect(backup).toContain('-name "$backup_namespace-*.dump.age"');
+  });
+
+  it("pins backup and restore to PROJECT_DIR/compose.yaml despite ambient COMPOSE_FILE", async () => {
+    await installMocksAndEnvironment();
+    const backupResult = await runScript(backupScript, root, {
+      COMPOSE_FILE: "/wrong/compose.yaml",
+    });
+    expect(backupResult.code).toBe(0);
+
+    const backup = join(root, "valid.dump.age");
+    await writeFile(backup, "age-encryption.org/v1\n-> test\n--- test\narchive-fixture");
+    const restoreResult = await runScript(
+      restoreScript,
+      root,
+      { COMPOSE_FILE: "/wrong/compose.yaml" },
+      [backup],
+    );
+    expect(restoreResult.code).toBe(0);
+
+    const log = await readFile(join(root, "docker.log"), "utf8");
+    expect(log).toContain(`-f ${join(root, "compose.yaml")}`);
+    expect(log).not.toContain("/wrong/compose.yaml");
   });
 
   it("scopes backup publication and retention by the persisted Compose project", async () => {

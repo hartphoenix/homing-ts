@@ -17,6 +17,7 @@ blob-report/
 test-results/
 coverage/
 docs/mcp-brief.md
+docs/rollback-to-django.md
 *.log
 __pycache__/
 *.pyc
