@@ -29,6 +29,8 @@ Create and verify a backup:
 Both scripts default to `.env`. For an isolated rehearsal, set `HOMING_ENV_FILE` to its persistent
 mode-0600 environment file. The scripts read `COMPOSE_PROJECT_NAME` from that file, so scheduled or
 later commands retain the same project, volumes, networks, image digests, ports, and credentials.
+For a legacy checkout whose environment predates that field, set the explicit
+`HOMING_COMPOSE_PROJECT_NAME` wrapper variable.
 Backup artifacts default to `backups/<COMPOSE_PROJECT_NAME>/`, retention applies only within that
 namespace, and off-host uploads append the same project namespace. Production and rehearsal
 therefore cannot overwrite or prune each other's artifacts.
@@ -56,17 +58,25 @@ RESTORE_CONFIRM=YES AGE_IDENTITY_FILE=/path/to/offline/identity \
 Restore verifies the encrypted archive inventory before stopping public traffic. It then stops web
 and Caddy, drops and recreates the target database, decrypts through a draining FIFO, and waits for
 both `age` and `pg_restore`. A reset, decrypt, or restore failure leaves web and Caddy stopped.
-PostgreSQL restore runs as one transaction, and migrations happen only after restore success. Even
-after success, both web and Caddy remain stopped; run private semantic checks and
+PostgreSQL restore runs as one transaction. Provisioning, migrations, and runtime-role hardening
+happen only after restore success. Even after success, both web and Caddy remain stopped; run private semantic checks and
 `./docker/smoke.sh http://localhost:8081` explicitly before starting public Caddy.
 
 Rehearse restore into an isolated database before cutover. Retain the Django encrypted backup,
 database volume, checkout, and image for at least seven days. Rolling traffic back to Django after
 the TypeScript app accepts writes loses those new writes; that is a human cutover decision.
 
-Immediately after importing the frozen Django snapshot, validate the redacted migration boundary:
+Immediately after importing the frozen Django snapshot, validate the redacted migration boundary
+through the guarded importer. On an already imported target, import is a checksum-verified replay
+and then the independent validator runs:
 
 ```sh
-docker compose --env-file /opt/homing-ts/.env.rehearsal run --rm --no-deps \
-  -e MIGRATE_PROJECT_ID=<existing-project-uuid> migrate bun run db:validate-import
+export MIGRATION_CUTOVER_AT=<recorded-UTC-freeze-timestamp>
+HOMING_ENV_FILE=/opt/homing-ts/.env.rehearsal DJANGO_PROJECT_DIR=/opt/homing-rehearsal \
+  /opt/homing-ts/docker/import-frozen-django.sh
+unset MIGRATION_CUTOVER_AT
 ```
+
+Keep the Django source frozen and privately reachable until both import and independent validation
+finish. The script creates and removes a temporary read-only credential and network attachment;
+neither command prints row contents or credentials.

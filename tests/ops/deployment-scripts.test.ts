@@ -10,6 +10,8 @@ const repository = process.cwd();
 const backupScript = join(repository, "docker/backup.sh");
 const restoreScript = join(repository, "docker/restore.sh");
 const preflightScript = join(repository, "docker/preflight.sh");
+const importScript = join(repository, "docker/import-frozen-django.sh");
+const hardenScript = join(repository, "docker/harden-runtime-role.sh");
 
 const fakeDocker = `#!/bin/sh
 set -eu
@@ -72,6 +74,30 @@ if [ "$FAKE_DECRYPT_STATUS" -ne 0 ]; then exit "$FAKE_DECRYPT_STATUS"; fi
 tail -n +4 "$file"
 `;
 
+const fakeImportDocker = `#!/bin/sh
+set -eu
+printf '%s\n' "$*" >> "$FAKE_DOCKER_LOG"
+case "$*" in
+  *'/django/compose.yaml ps --status running -q web'*) exit 0 ;;
+  *'/django/compose.yaml ps --status running -q caddy'*) exit 0 ;;
+  *'/django/compose.yaml ps --status running -q db'*) printf 'source-db\n'; exit 0 ;;
+  *'--project-name homing-ts '*' ps --status running -q web'*)
+    if [ "$FAKE_TARGET_WEB_RUNNING" -eq 1 ]; then printf 'target-web\n'; fi
+    exit 0
+    ;;
+  *'--project-name homing-ts '*' ps --status running -q caddy'*) exit 0 ;;
+  *'compose '*' ps --status running -q db'*) printf 'target-db\n'; exit 0 ;;
+  *'inspect --format '*target-db*) printf 'homing-test_database\n'; exit 0 ;;
+  *'exec source-db sh -c '*'printf %s'*) printf 'django_fixture\n'; exit 0 ;;
+  *'network connect '*) exit 0 ;;
+  *'inspect source-db') exit 0 ;;
+  *'exec -i source-db '*) cat >/dev/null; exit 0 ;;
+  *'network disconnect '*) exit "$FAKE_DISCONNECT_STATUS" ;;
+  *' run --rm --no-deps --no-TTY '*) exit 0 ;;
+  *) exit 1 ;;
+esac
+`;
+
 function runScript(
   script: string,
   root: string,
@@ -93,12 +119,15 @@ function runScript(
         FAKE_INVENTORY_STATUS: "0",
         FAKE_INVENTORY_EARLY_CLOSE: "0",
         FAKE_RESTORE_STATUS: "0",
+        FAKE_TARGET_WEB_RUNNING: "0",
         FAKE_BAD_ENVELOPE: "0",
         RESTORE_CONFIRM: "YES",
         HOMING_ENV_FILE: "",
         COMPOSE_PROJECT_NAME: "",
         COMPOSE_FILE: "",
         HOMING_OPS_LOCK_DIR: "",
+        HOMING_DOCKER_CONTEXT: "default",
+        HOMING_COMPOSE_PROJECT_NAME: "",
         APP_DOMAIN: "",
         PUBLIC_ORIGIN: "",
         HOMING_IMAGE: "",
@@ -249,6 +278,7 @@ describe("deployment script failure paths", () => {
     expect(log).not.toContain("--clean");
     expect(log).toContain("run --rm --no-deps provision");
     expect(log).toContain("run --rm --no-deps migrate");
+    expect(log).toContain("run --rm --no-deps harden");
     expect(log).not.toContain("run --rm --no-deps web bun run db:migrate");
     expect(log).not.toContain("up --detach --wait web caddy");
   });
@@ -273,8 +303,82 @@ describe("deployment script failure paths", () => {
     expect(result.output).toContain("production preflight passed");
   });
 
+  it("preflight accepts a content-addressed local Homing image", async () => {
+    await installMocksAndEnvironment();
+    const result = await runScript(preflightScript, root, {
+      HOMING_IMAGE: `sha256:${"d".repeat(64)}`,
+    });
+    expect(result.code).toBe(0);
+  });
+
   it("ships the production preflight as an executable", async () => {
     expect((await stat(preflightScript)).mode & 0o111).not.toBe(0);
+  });
+
+  it("ships guarded migration-boundary scripts as executables", async () => {
+    expect((await stat(importScript)).mode & 0o111).not.toBe(0);
+    expect((await stat(hardenScript)).mode & 0o111).not.toBe(0);
+    const result = await runScript(importScript, root, { MIGRATION_CUTOVER_AT: "" });
+    expect(result.code).not.toBe(0);
+    expect(result.output).toContain("MIGRATION_CUTOVER_AT is required");
+  });
+
+  it("fails a successful import when temporary network cleanup fails", async () => {
+    await installMocksAndEnvironment();
+    const djangoRoot = join(root, "django");
+    await mkdir(djangoRoot);
+    await writeFile(join(djangoRoot, ".env"), "POSTGRES_DB=django_fixture\n");
+    await writeFile(join(djangoRoot, "compose.yaml"), "services: {}\n");
+    await chmod(join(djangoRoot, ".env"), 0o600);
+    await writeFile(join(root, "bin", "docker"), fakeImportDocker);
+    await chmod(join(root, "bin", "docker"), 0o755);
+
+    const result = await runScript(importScript, root, {
+      DJANGO_PROJECT_DIR: djangoRoot,
+      MIGRATION_CUTOVER_AT: "2026-08-25T04:00:00Z",
+      FAKE_DISCONNECT_STATUS: "37",
+    });
+    expect(result.code).not.toBe(0);
+    expect(result.output).toContain("failed to disconnect temporary Django import network");
+    expect(result.output).not.toContain("cleanup completed");
+    const log = await readFile(join(root, "docker.log"), "utf8");
+    expect(log).toContain("exec -i source-db");
+    expect(log).toContain("network disconnect homing-test_database source-db");
+    expect(log).toContain("--context default compose --project-name homing-ts");
+    expect(log).toContain("--context default compose --project-name homing");
+  });
+
+  it("refuses import while replacement traffic can write", async () => {
+    await installMocksAndEnvironment();
+    const djangoRoot = join(root, "django");
+    await mkdir(djangoRoot);
+    await writeFile(join(djangoRoot, ".env"), "POSTGRES_DB=django_fixture\n");
+    await writeFile(join(djangoRoot, "compose.yaml"), "services: {}\n");
+    await chmod(join(djangoRoot, ".env"), 0o600);
+    await writeFile(join(root, "bin", "docker"), fakeImportDocker);
+    await chmod(join(root, "bin", "docker"), 0o755);
+
+    const result = await runScript(importScript, root, {
+      DJANGO_PROJECT_DIR: djangoRoot,
+      MIGRATION_CUTOVER_AT: "2026-08-25T04:00:00Z",
+      FAKE_TARGET_WEB_RUNNING: "1",
+    });
+    expect(result.code).not.toBe(0);
+    expect(result.output).toContain("replacement web must be stopped before import");
+    const log = await readFile(join(root, "docker.log"), "utf8");
+    expect(log).not.toContain("network connect");
+  });
+
+  it("gates web on runtime hardening and keeps private validation loopback-only", async () => {
+    const compose = await readFile(join(repository, "compose.yaml"), "utf8");
+    const privateCompose = await readFile(join(repository, "compose.private.yaml"), "utf8");
+    const harden = await readFile(hardenScript, "utf8");
+    expect(compose).toContain("harden:");
+    expect(compose).toContain("condition: service_completed_successfully");
+    expect(harden).toContain("REVOKE ALL PRIVILEGES ON TABLE public.migration_records");
+    expect(harden).toContain("runtime role can mutate migration evidence");
+    expect(privateCompose).toContain("127.0.0.1:");
+    expect(privateCompose).not.toContain('"0.0.0.0:');
   });
 
   it("keeps Compose resources project-scoped and persists rehearsal selection", async () => {
@@ -285,8 +389,8 @@ describe("deployment script failure paths", () => {
     expect(compose).not.toContain("EDGE_NETWORK_NAME");
     expect(backup).toContain("HOMING_ENV_FILE");
     expect(restore).toContain("HOMING_ENV_FILE");
-    expect(backup).toContain('docker compose -f "$compose_file"');
-    expect(restore).toContain('docker compose -f "$compose_file"');
+    expect(backup).toContain('docker_cmd compose -f "$compose_file"');
+    expect(restore).toContain('docker_cmd compose -f "$compose_file"');
     expect(backup).toContain("read_env_value COMPOSE_PROJECT_NAME");
     expect(restore).toContain("read_env_value COMPOSE_PROJECT_NAME");
     expect(backup).toContain("backups/$backup_namespace");
@@ -314,6 +418,56 @@ describe("deployment script failure paths", () => {
     const log = await readFile(join(root, "docker.log"), "utf8");
     expect(log).toContain(`-f ${join(root, "compose.yaml")}`);
     expect(log).not.toContain("/wrong/compose.yaml");
+  });
+
+  it("ignores ambient Compose project selection in favor of the persisted environment", async () => {
+    await installMocksAndEnvironment();
+    const result = await runScript(backupScript, root, {
+      COMPOSE_PROJECT_NAME: "wrong-ambient-project",
+    });
+    expect(result.code).toBe(0);
+    const log = await readFile(join(root, "docker.log"), "utf8");
+    expect(log).toContain("-p homing-ts");
+    expect(log).not.toContain("wrong-ambient-project");
+  });
+
+  it("supports an explicit project pin for legacy environment files", async () => {
+    await installMocksAndEnvironment();
+    const result = await runScript(backupScript, root, {
+      COMPOSE_PROJECT_NAME: "wrong-ambient-project",
+      HOMING_COMPOSE_PROJECT_NAME: "homing",
+    });
+    expect(result.code).toBe(0);
+    const log = await readFile(join(root, "docker.log"), "utf8");
+    expect(log).toContain("-p homing");
+    expect(log).not.toContain("wrong-ambient-project");
+  });
+
+  it("pins backup and destructive restore to the explicit Docker context", async () => {
+    await installMocksAndEnvironment();
+    const backupResult = await runScript(backupScript, root, {
+      DOCKER_CONTEXT: "poisoned-context",
+      DOCKER_HOST: "tcp://poisoned.invalid:2376",
+    });
+    expect(backupResult.code).toBe(0);
+
+    const backup = join(root, "valid.dump.age");
+    await writeFile(backup, "age-encryption.org/v1\n-> test\n--- test\narchive-fixture");
+    const restoreResult = await runScript(
+      restoreScript,
+      root,
+      {
+        DOCKER_CONTEXT: "poisoned-context",
+        DOCKER_HOST: "tcp://poisoned.invalid:2376",
+      },
+      [backup],
+    );
+    expect(restoreResult.code).toBe(0);
+
+    const log = await readFile(join(root, "docker.log"), "utf8");
+    expect(log).toContain("--context default compose");
+    expect(log).not.toContain("poisoned-context");
+    expect(log).not.toContain("poisoned.invalid");
   });
 
   it("scopes backup publication and retention by the persisted Compose project", async () => {

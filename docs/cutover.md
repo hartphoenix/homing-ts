@@ -48,8 +48,10 @@ build step: `up` consumes only the image reference already prepared for the rele
 The currently verified upstream minor tags are PostgreSQL `17.11-alpine3.24` and Caddy
 `2.11.4-alpine`. Resolve each to its multi-architecture manifest digest during release
 preparation (`docker buildx imagetools inspect ...`) and record the resulting `@sha256:` values in
-the environment file. Build and publish Homing to a registry, then record its registry digest too.
-Preflight rejects tags and requires all three references to end in `@sha256:<64 lowercase hex>`.
+the environment file. Build and publish Homing to a registry and record its registry digest, or
+build the release commit on the production host and record its exact local `sha256:<image-id>`.
+Preflight rejects tags; PostgreSQL and Caddy require registry digests, while Homing accepts either
+a registry digest or a content-addressed local image ID.
 
 ```sh
 chmod 600 .env.rehearsal
@@ -77,13 +79,14 @@ docker compose --env-file .env.rehearsal up --detach --wait web caddy
 ./docker/smoke.sh http://localhost:8081
 ```
 
-For production, build or pull the release-specific image before `up`, then run preflight and use
-the same immutable image value for migration and web:
+For production, build or pull the release-specific image, run preflight, then start only the
+private database/migration chain. Do not start web or Caddy before the frozen import validates:
 
 ```sh
 docker pull <registry>/homing@sha256:<release-manifest-digest>
 ./docker/preflight.sh .env
-docker compose --env-file .env up --detach --wait
+docker compose --project-name homing-ts --env-file .env \
+  up --detach --wait db provision migrate harden
 ```
 
 The production `.env` must persist the exact Homing, PostgreSQL, and Caddy digest references; this
@@ -93,7 +96,8 @@ Before admitting public traffic, install a daily host timer for bounded database
 one successful run. The timer runs from `/opt/homing-ts` with the production environment file:
 
 ```sh
-docker compose --env-file .env run --rm --no-deps migrate bun run db:maintenance
+docker compose --project-name homing-ts --env-file .env \
+  run --rm --no-deps web bun run db:maintenance
 ```
 
 Run the encrypted backup timer under the same host account. Both jobs must alert on nonzero exit;
@@ -103,26 +107,73 @@ from the persistent environment file.
 ## Production switch
 
 1. Record the intended release commit and verify public ports, disk space, image availability, and
-   both rollback checkouts.
+   both rollback checkouts. Start only replacement `db`, `provision`, `migrate`, and `harden`; prove
+   that the runtime role cannot mutate `migration_records` and leave replacement web/Caddy stopped.
 2. Stop Django Caddy and web traffic. Record this freeze timestamp. Keep the Django database up but
    admit no writes.
 3. Take the final encrypted Django backup from the frozen database. Verify its encrypted envelope;
    verify dump inventory during the isolated restore rehearsal, because routine backup does not
    require the offline recovery identity.
-4. Initialize the empty replacement database, run Drizzle migrations, and import from the frozen
-   Django snapshot through the `migrate` service. Preserve both user IDs and the project UUID.
-   Run `db:validate-import` through that same isolated service.
-5. Start the replacement privately and verify both migrated memberships, Hart's login if desired,
-   API isolation, the agent kit, a new encrypted backup, and an isolated restore of that backup.
-6. Re-pair each installed agent without adding another schedule. Confirm project discovery retains
-   the project UUID, replace the token in the secret store, run source-plan repair and one on-demand
-   search, then confirm exactly one schedule remains.
-7. Rehearse the rollback command from the running replacement. Keep public Caddy stopped until the
-   private semantic checks and smoke pass, then start it on public ports and repeat the smoke check
-   and core browser journeys.
+4. Run the guarded import script with the freeze timestamp. It attaches Django PostgreSQL to the
+   replacement database network under a random alias, creates a random read-only SCRAM role,
+   inherits the source URL without putting it in command history, runs import and independent
+   validation, then drops the role and disconnects the bridge even on failure:
 
-If any validation before step 7 fails, stop the replacement and restart Django web and Caddy before
-admitting writes.
+   ```sh
+   export MIGRATION_CUTOVER_AT=<recorded-UTC-freeze-timestamp>
+   HOMING_ENV_FILE=/opt/homing-ts/.env DJANGO_PROJECT_DIR=/opt/homing \
+     /opt/homing-ts/docker/import-frozen-django.sh
+   unset MIGRATION_CUTOVER_AT
+   ```
+
+5. Require
+   identical canonical source/target checksums and counts for all users/profiles, saved prompts,
+   projects/memberships/invitations/revisions, runs, leads/interests/comments, reviews, and audits.
+   Confirm the reported rotation counts for sessions, tokens, links, throttles, idempotency rows,
+   change-feed rows, active run claims, and pending invitations. Require zero active users needing
+   password reset and record the count of pending invitations needing reissue.
+6. Start web through the loopback-only override; keep Caddy stopped:
+
+   ```sh
+   docker compose --project-name homing-ts --env-file .env \
+     -f compose.yaml -f compose.private.yaml \
+     up --detach --wait web
+   SMOKE_EXPECTED_ORIGIN=https://homing.hartphoenix.com \
+     ./docker/smoke.sh http://127.0.0.1:18000
+   ```
+
+   In this private phase, perform only reads: rerun canonical count/checksum validation, inspect each
+   user's project memberships and roles, preserve both project UUIDs, inspect
+   lead/comment/interest/trash state, check read-only API isolation, and load the public agent-kit
+   files. Loopback requests cannot satisfy the production Origin contract for browser mutations.
+   Also take a new encrypted replacement backup and prove it with an isolated restore. All browser
+   sessions are intentionally fresh after deployment.
+7. Rehearse the rollback command from the running replacement. Keep public Caddy stopped until the
+   private read-only checks and smoke pass. Remove the private port by stopping web and recreating it
+   from the base Compose file, verify it has no published port, then start Caddy on public ports:
+
+   ```sh
+   docker compose --project-name homing-ts --env-file .env \
+     -f compose.yaml -f compose.private.yaml stop web
+   docker compose --project-name homing-ts --env-file .env -f compose.yaml \
+     up --detach --wait --force-recreate web
+   test -z "$(docker compose --project-name homing-ts --env-file .env \
+     -f compose.yaml port web 8000)"
+   docker compose --project-name homing-ts --env-file .env -f compose.yaml \
+     up --detach --wait caddy
+   ./docker/smoke.sh https://homing.hartphoenix.com
+   ```
+
+8. While Django remains frozen and schedules remain disabled, verify an existing-password login and
+   the core browser journeys over the public HTTPS origin. Reissue any pending invitations. Re-pair
+   each installed agent without adding another schedule; confirm project discovery retains its UUID,
+   replace the token in the secret store, run source-plan repair and one on-demand search, and verify
+   the results. Only after those checks pass, enable the maintenance, backup, and search schedules and
+   confirm exactly one of each intended schedule exists.
+
+If any validation before public step 7 fails, stop the replacement and restart Django web and Caddy.
+If a public step-8 check fails, freeze replacement traffic before choosing rollback; account for any
+replacement-side writes under the divergence rule below.
 
 ## Rollback
 

@@ -1,6 +1,6 @@
 # Homing replacement build specification
 
-Status: local functional candidate; private deployment and cutover rehearsal pending.
+Status: release candidate; production migration rehearsal and cutover pending.
 
 ## Outcome
 
@@ -22,9 +22,25 @@ exposure, and writes a pinned Argon2id hash. It is the repair path for unsupport
 
 ## Migration boundary
 
-Migrate user identity/profile/password hashes, active project configuration and UUID, current
-prompt revision, and memberships. Do not migrate lead/search history, tokens, sessions, links,
-saved prompts, audit events, or change history.
+Migrate every user and profile, password hash, active/disabled state, last login, nonauthorizing
+legacy staff metadata, saved prompt, project and membership, invitation record, prompt revision,
+search-run history, lead (including trash state), interest, comment, source-plan review, and audit
+event. Preserve numeric IDs, UUIDs, roles, timestamps, and authored content.
+
+Do not carry live authority or replay state across the trust boundary. Browser sessions, auth
+throttles, agent tokens, device links, idempotency rows, and the legacy change feed are rotated.
+Every project starts a fresh feed epoch at sequence zero. Every run drops token references, claims,
+leases, and idempotency keys; active run statuses additionally become cancelled historical rows.
+Token references in reviews and audits are cleared. Existing invitation rows remain as history,
+but unused invitation digests are tombstoned and pending invitations are revoked for explicit
+reissue after cutover.
+
+The importer reads Django in a repeatable-read, read-only transaction and accepts only a completely
+empty target. It validates referential closure, active ownership, prompt history, comment trees,
+target bounds, and URL-identity collisions before writing. Before commit it rereads the target and
+requires an exact canonical checksum match; the separate validator independently rereads both
+databases and checks counts, checksums, migration records, fresh sessions, and feed epochs.
+Cutover is blocked if any active user has a password hash the replacement cannot verify.
 
 ## Release priority
 
