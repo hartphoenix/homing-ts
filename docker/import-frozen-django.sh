@@ -148,8 +148,9 @@ SQL
   source_password=
   DJANGO_DATABASE_URL=
   export DJANGO_DATABASE_URL
-  if [ "$main_status" -eq 0 ] && [ "$cleanup_failed" -ne 0 ]; then
-    main_status=1
+  if [ "$cleanup_failed" -ne 0 ]; then
+    echo "temporary Django import cleanup is incomplete; manual intervention required" >&2
+    main_status=125
   fi
   if [ "$main_status" -eq 0 ] && [ "$main_completed" -eq 1 ]; then
     echo "frozen Django import, validation, and cleanup completed"
