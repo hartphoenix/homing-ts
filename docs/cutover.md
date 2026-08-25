@@ -7,11 +7,13 @@ may own public ports 80/443 at a time.
 Production deployment, traffic switching, and rollback are human-authorized operations. Agents may
 prepare commands and run preapproved staging commands, but do not handle host secrets.
 
-The web container starts only after the one-shot `migrate` service completes successfully. A normal
-`docker compose --env-file .env up --detach --wait` therefore applies pending Drizzle migrations
-before health checks can admit web traffic. Import and validation commands that intentionally run
-against a stopped or isolated database must use the least-privileged service appropriate to the
-operation: `migrate` for schema/import work and `web` only for runtime reads and writes.
+The web container starts only after the one-shot `migrate` service completes successfully. Do not
+use Compose `--wait` on a graph containing `provision`, `migrate`, or `harden`: the production
+Compose version can return nonzero because those successful one-shots are exited. Start the graph
+detached, require each one-shot to finish with exit code zero, and inspect long-running service
+health separately. Import and validation commands that intentionally run against a stopped or
+isolated database must use the least-privileged service appropriate to the operation: `migrate` for
+schema/import work and `web` only for runtime reads and writes.
 
 For production, `PUBLIC_ORIGIN` must be a bare HTTPS origin (for example,
 `https://homing.example.test`) and `APP_DOMAIN` must be the bare public hostname (for example,
@@ -29,11 +31,16 @@ and sequence privileges, but no role/database/schema DDL privileges. Preflight r
 URL/credential/host mismatches without printing values.
 
 Run the preflight from the release checkout before starting the production Compose project. It
-validates these values and any configured identity file without printing them. The private HTTP
-localhost rehearsal below intentionally uses different values and does not pass this production
-preflight:
+validates these values and any configured identity file without printing them. Because Git does not
+preserve `0644` versus `0600` for non-executable files, normalize the public Caddyfile after any
+checkout created under a restrictive umask. Preflight requires an owned, regular, non-symlink
+mode-0644 Caddyfile, rejects ACME email configuration that can fail only during certificate
+issuance, and validates the file in the exact pinned Caddy image without opening network ports. The
+private HTTP localhost rehearsal below intentionally uses different values and does not pass this
+production preflight:
 
 ```sh
+chmod 0644 Caddyfile
 ./docker/preflight.sh .env
 ```
 
@@ -55,7 +62,23 @@ a registry digest or a content-addressed local image ID.
 
 ```sh
 chmod 600 .env.rehearsal
-docker compose --env-file .env.rehearsal up --detach --wait
+rehearsal_compose() { docker compose --env-file .env.rehearsal "$@"; }
+rehearsal_compose up --detach
+for service in provision migrate harden; do
+  container=$(rehearsal_compose ps --all -q "$service")
+  test -n "$container"
+  test "$(docker wait "$container")" = 0
+  test "$(docker inspect "$container" --format '{{.State.Status}}:{{.State.ExitCode}}')" = exited:0
+done
+for service in db web; do
+  container=$(rehearsal_compose ps --status running -q "$service")
+  test -n "$container"
+  for _ in $(seq 1 45); do
+    test "$(docker inspect "$container" --format '{{.State.Health.Status}}')" = healthy && break
+    sleep 2
+  done
+  test "$(docker inspect "$container" --format '{{.State.Health.Status}}')" = healthy
+done
 ```
 
 At minimum, `.env.rehearsal` contains `COMPOSE_PROJECT_NAME=homing-ts-rehearsal`, distinct database
@@ -75,7 +98,12 @@ After restore, the script leaves web and Caddy stopped. Start the rehearsal Cadd
 localhost ports, run semantic checks and smoke, then make the human decision to start public Caddy:
 
 ```sh
-docker compose --env-file .env.rehearsal up --detach --wait web caddy
+rehearsal_compose() { docker compose --env-file .env.rehearsal "$@"; }
+rehearsal_compose up --detach web caddy
+for _ in $(seq 1 45); do
+  ./docker/smoke.sh http://localhost:8081 && break
+  sleep 2
+done
 ./docker/smoke.sh http://localhost:8081
 ```
 
@@ -85,8 +113,17 @@ private database/migration chain. Do not start web or Caddy before the frozen im
 ```sh
 docker pull <registry>/homing@sha256:<release-manifest-digest>
 ./docker/preflight.sh .env
-docker compose --project-name homing-ts --env-file .env \
-  up --detach --wait db provision migrate harden
+prod_compose() { docker compose --project-name homing-ts --env-file .env "$@"; }
+prod_compose up --detach db provision migrate harden
+for service in provision migrate harden; do
+  container=$(prod_compose ps --all -q "$service")
+  test -n "$container"
+  test "$(docker wait "$container")" = 0
+  test "$(docker inspect "$container" --format '{{.State.Status}}:{{.State.ExitCode}}')" = exited:0
+done
+db_container=$(prod_compose ps --status running -q db)
+test -n "$db_container"
+test "$(docker inspect "$db_container" --format '{{.State.Health.Status}}')" = healthy
 ```
 
 The production `.env` must persist the exact Homing, PostgreSQL, and Caddy digest references; this
@@ -135,9 +172,18 @@ from the persistent environment file.
 6. Start web through the loopback-only override; keep Caddy stopped:
 
    ```sh
-   docker compose --project-name homing-ts --env-file .env \
-     -f compose.yaml -f compose.private.yaml \
-     up --detach --wait web
+   private_compose() {
+     docker compose --project-name homing-ts --env-file .env \
+       -f compose.yaml -f compose.private.yaml "$@"
+   }
+   private_compose up --detach web
+   web_container=$(private_compose ps --status running -q web)
+   test -n "$web_container"
+   for _ in $(seq 1 45); do
+     test "$(docker inspect "$web_container" --format '{{.State.Health.Status}}')" = healthy && break
+     sleep 2
+   done
+   test "$(docker inspect "$web_container" --format '{{.State.Health.Status}}')" = healthy
    SMOKE_EXPECTED_ORIGIN=https://homing.hartphoenix.com \
      ./docker/smoke.sh http://127.0.0.1:18000
    ```
@@ -153,14 +199,29 @@ from the persistent environment file.
    from the base Compose file, verify it has no published port, then start Caddy on public ports:
 
    ```sh
-   docker compose --project-name homing-ts --env-file .env \
-     -f compose.yaml -f compose.private.yaml stop web
-   docker compose --project-name homing-ts --env-file .env -f compose.yaml \
-     up --detach --wait --force-recreate web
-   test -z "$(docker compose --project-name homing-ts --env-file .env \
-     -f compose.yaml port web 8000)"
-   docker compose --project-name homing-ts --env-file .env -f compose.yaml \
-     up --detach --wait caddy
+   private_compose() {
+     docker compose --project-name homing-ts --env-file .env \
+       -f compose.yaml -f compose.private.yaml "$@"
+   }
+   prod_compose() {
+     docker compose --project-name homing-ts --env-file .env -f compose.yaml "$@"
+   }
+   private_compose stop web
+   prod_compose up --detach --no-deps --force-recreate web
+   web_container=$(prod_compose ps --status running -q web)
+   test -n "$web_container"
+   for _ in $(seq 1 45); do
+     test "$(docker inspect "$web_container" --format '{{.State.Health.Status}}')" = healthy && break
+     sleep 2
+   done
+   test "$(docker inspect "$web_container" --format '{{.State.Health.Status}}')" = healthy
+   port_bindings=$(docker inspect "$web_container" --format '{{json .HostConfig.PortBindings}}')
+   case "$port_bindings" in null|'{}') ;; *) exit 1 ;; esac
+   prod_compose up --detach --no-deps caddy
+   for _ in $(seq 1 45); do
+     ./docker/smoke.sh https://homing.hartphoenix.com && break
+     sleep 2
+   done
    ./docker/smoke.sh https://homing.hartphoenix.com
    ```
 

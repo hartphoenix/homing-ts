@@ -20,6 +20,30 @@ if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode 
     raise SystemExit(".env must be a regular file owned by this user with mode 0600")
 PY
 
+python3 - "$project_dir/Caddyfile" <<'PY'
+import os
+import re
+import stat
+import sys
+
+try:
+    info = os.lstat(sys.argv[1])
+except OSError:
+    raise SystemExit("Caddyfile is not accessible")
+if (
+    not stat.S_ISREG(info.st_mode)
+    or info.st_uid != os.getuid()
+    or stat.S_IMODE(info.st_mode) != 0o644
+):
+    raise SystemExit(
+        "Caddyfile must be a regular non-symlink file owned by this user with mode 0644"
+    )
+with open(sys.argv[1], encoding="utf-8") as caddyfile:
+    caddy_source = caddyfile.read()
+if re.search(r"(?m)^[ \t]*email(?:[ \t]+|$)", caddy_source):
+    raise SystemExit("Caddyfile must omit the ACME email directive")
+PY
+
 read_env_value() {
   key=$1
   awk -v key="$key" '
@@ -266,6 +290,17 @@ PY
 
 if [ "$failures" -ne 0 ]; then
   echo "production preflight failed ($failures issue(s)); no services were started" >&2
+  exit 1
+fi
+
+if ! docker --context "${HOMING_DOCKER_CONTEXT:-default}" run --rm \
+  --network none --read-only --tmpfs /tmp:mode=1777 \
+  --env "APP_DOMAIN=$app_domain" \
+  --volume "$project_dir/Caddyfile:/etc/caddy/Caddyfile:ro" \
+  --entrypoint /bin/sh "$caddy_image" -ec \
+  'test -r /etc/caddy/Caddyfile; exec caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile' \
+  </dev/null; then
+  echo "Caddyfile validation failed in the pinned Caddy image" >&2
   exit 1
 fi
 
