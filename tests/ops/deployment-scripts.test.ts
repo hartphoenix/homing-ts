@@ -12,6 +12,7 @@ const restoreScript = join(repository, "docker/restore.sh");
 const preflightScript = join(repository, "docker/preflight.sh");
 const importScript = join(repository, "docker/import-frozen-django.sh");
 const hardenScript = join(repository, "docker/harden-runtime-role.sh");
+const dockerfile = join(repository, "Dockerfile");
 
 const fakeDocker = `#!/bin/sh
 set -eu
@@ -321,6 +322,13 @@ describe("deployment script failure paths", () => {
     const result = await runScript(importScript, root, { MIGRATION_CUTOVER_AT: "" });
     expect(result.code).not.toBe(0);
     expect(result.output).toContain("MIGRATION_CUTOVER_AT is required");
+  });
+
+  it("keeps runtime package scripts readable by the non-root image user", async () => {
+    const source = await readFile(dockerfile, "utf8");
+    const runtime = source.split(" AS runtime", 2)[1];
+    expect(runtime).toContain("COPY --chown=app:app package.json bun.lock ./");
+    expect(runtime).toContain("COPY --chown=app:app patches ./patches");
   });
 
   it("fails a successful import when temporary network cleanup fails", async () => {
