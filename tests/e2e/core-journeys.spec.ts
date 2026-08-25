@@ -66,25 +66,53 @@ async function signIn(page: Page): Promise<void> {
   await expect(page.getByRole("heading", { name: "Your shared searches" })).toBeVisible();
 }
 
+async function chooseListView(page: Page): Promise<void> {
+  const desktopControl = page.locator(".view-toggle").getByRole("button", { name: "List" });
+  if (await desktopControl.isVisible()) {
+    await desktopControl.click();
+    return;
+  }
+  await page.getByRole("button", { name: "Open navigation menu" }).click();
+  await page
+    .getByRole("navigation", { name: "Mobile navigation" })
+    .getByRole("button", { name: "View as list" })
+    .click();
+}
+
+async function followShellLink(page: Page, name: "Agent setup" | "Settings"): Promise<void> {
+  const desktopLink = page.locator(".desktop-nav").getByRole("link", { name, exact: true });
+  if (await desktopLink.isVisible()) {
+    await desktopLink.click();
+    return;
+  }
+  await page.getByRole("button", { name: "Open navigation menu" }).click();
+  await page
+    .getByRole("navigation", { name: "Mobile navigation" })
+    .getByRole("link", { name, exact: true })
+    .click();
+}
+
 test("lead search state and collaboration survive the full browser journey", async ({ page }) => {
   await signIn(page);
+  let trashedCommentReads = 0;
+  page.on("request", (request) => {
+    if (request.url().includes(`/leads/${leadId}/comments`)) trashedCommentReads += 1;
+  });
   await page.getByRole("link", { name: /September housing/ }).click();
   await expect(page.getByRole("heading", { name: "September housing" })).toBeVisible();
 
   await page.getByLabel("Search leads").fill("Prospect");
   await expect(page).toHaveURL(/q=Prospect/);
-  await page.getByRole("button", { name: "List" }).click();
+  await chooseListView(page);
   await expect(page).toHaveURL(/view=list/);
-  await page.getByLabel("Lead status").selectOption("trashed");
+  await page.getByLabel("Lead status").selectOption("trash");
   await expect(page.getByRole("heading", { name: "Trash is empty" })).toBeVisible();
   await page.getByLabel("Lead status").selectOption("active");
-  await expect(
-    page.getByRole("heading", { name: "Sunny Prospect Heights apartment" }),
-  ).toBeVisible();
+  await expect(page.getByRole("link", { name: /Sunny Prospect Heights apartment/ })).toBeVisible();
 
   await page.getByRole("link", { name: /Sunny Prospect Heights apartment/ }).click();
-  await page.getByRole("button", { name: "♡ Mark interested" }).click();
-  await expect(page.getByRole("button", { name: "♥ Interested" })).toBeVisible();
+  await page.getByRole("button", { name: "Mark interested" }).click();
+  await expect(page.getByRole("button", { name: "Remove interest" })).toBeVisible();
   await page.getByPlaceholder("Add a note for everyone…").fill("Worth visiting this week.");
   await page.getByRole("button", { name: "Add comment" }).click();
   await expect(page.getByText("Worth visiting this week.")).toBeVisible();
@@ -95,8 +123,13 @@ test("lead search state and collaboration survive the full browser journey", asy
   await expect(page.getByRole("heading", { name: "Sunny Prospect Heights home" })).toBeVisible();
   await page.getByRole("button", { name: "Move to trash" }).click();
   await expect(page.getByRole("heading", { name: "September housing" })).toBeVisible();
-  await page.getByLabel("Lead status").selectOption("trashed");
+  await page.getByLabel("Lead status").selectOption("trash");
+  trashedCommentReads = 0;
   await page.getByRole("link", { name: /Sunny Prospect Heights home/ }).click();
+  await expect(page.getByRole("button", { name: "Restore" })).toBeVisible();
+  expect(trashedCommentReads).toBe(0);
+  await expect(page.getByRole("button", { name: "Edit lead" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Add comment" })).toHaveCount(0);
   await page.getByRole("button", { name: "Restore" }).click();
   await expect(page.getByRole("button", { name: "Move to trash" })).toBeVisible();
 });
@@ -136,22 +169,30 @@ test("profile pause, source repair, manual tokens, and session expiry rehydrate"
   `;
   await signIn(page);
   await expect(page.getByLabel("Source plan review")).toBeVisible();
-  await page.getByRole("link", { name: "Settings" }).click();
+  await followShellLink(page, "Settings");
   await expect(page.getByRole("heading", { name: /assistant needs to review/ })).toBeVisible();
   await page.getByText("See what it says").click();
-  await expect(page.getByLabel("Server-authored repair prompt")).toContainText("/agent/");
+  await expect(page.getByLabel("Server-authored repair prompt")).toHaveValue(/\/agent\//);
+  await expect(page.getByRole("button", { name: "Resolve review" })).toHaveCount(0);
   await page.getByRole("button", { name: "Pause for 24 hours" }).click();
   await expect(page.getByRole("heading", { name: "Search is paused" })).toBeVisible();
 
-  await page.getByRole("link", { name: "Agent setup" }).click();
+  await followShellLink(page, "Agent setup");
   await page.getByLabel("Key name").fill("Browser fallback key");
   await page.getByRole("button", { name: "Create access key" }).click();
   await expect(page.getByLabel("New access key")).not.toHaveValue("");
-  await page.getByRole("button", { name: "Revoke" }).click();
-  await expect(page.getByText(/revoked/)).toBeVisible();
+  const widths = await page.evaluate(() => ({
+    body: document.body.scrollWidth,
+    document: document.documentElement.scrollWidth,
+    viewport: window.innerWidth,
+  }));
+  expect(widths.document).toBeLessThanOrEqual(widths.viewport);
+  expect(widths.body).toBeLessThanOrEqual(widths.viewport);
+  await page.getByRole("button", { name: "Disconnect" }).click();
+  await expect(page.getByRole("heading", { name: "Your agent is connected" })).toHaveCount(0);
 
   await sql`delete from sessions`;
-  await page.getByRole("link", { name: "Settings" }).click();
+  await followShellLink(page, "Settings");
   await page.getByRole("button", { name: "Resume agents" }).click();
   await expect(page.getByRole("heading", { name: "Sign in again" })).toBeVisible();
 });

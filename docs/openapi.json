@@ -2017,6 +2017,73 @@
             }
           }
         }
+      },
+      "delete": {
+        "operationId": "delete_api_v1_projects_projectId_invitations",
+        "summary": "DELETE /api/v1/projects/{projectId}/invitations",
+        "tags": [
+          "browser-required"
+        ],
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "x-homing-classification": "browser-required",
+        "x-homing-csrf": true,
+        "parameters": [
+          {
+            "in": "path",
+            "name": "projectId",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "No content",
+            "headers": {
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard Homing error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/projects/{projectId}/members/{userId}": {

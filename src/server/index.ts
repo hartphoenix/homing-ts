@@ -2,10 +2,44 @@ import { createPostgresAgentServices } from "./agent/postgres-repository";
 import { createApp } from "./app";
 import { DrizzleAuthRepository } from "./auth/drizzle-repository";
 import { PostgresCollaborationRepository } from "./collaboration/postgres-repository";
-import { getConfig } from "./config";
+import { type AppConfig, getConfig } from "./config";
 import { seedDemoAccounts } from "./db/seed-demo";
 
 const config = getConfig();
+
+function assertDeploymentConfig(appConfig: AppConfig): void {
+  const origin = new URL(appConfig.PUBLIC_ORIGIN);
+  const localHttpOrigin =
+    origin.protocol === "http:" &&
+    (origin.hostname === "localhost" ||
+      origin.hostname === "127.0.0.1" ||
+      origin.hostname === "[::1]");
+
+  if (
+    origin.username ||
+    origin.password ||
+    origin.pathname !== "/" ||
+    origin.search ||
+    origin.hash
+  ) {
+    throw new Error(
+      "PUBLIC_ORIGIN must be a bare origin without credentials, path, query, or hash.",
+    );
+  }
+
+  if (appConfig.NODE_ENV === "production" && origin.protocol !== "https:" && !localHttpOrigin) {
+    throw new Error(
+      "PUBLIC_ORIGIN must use HTTPS in production (HTTP is permitted only for localhost rehearsal).",
+    );
+  }
+
+  if (appConfig.NODE_ENV === "production" && process.env.HOMING_DEMO_ACCOUNTS === "1") {
+    throw new Error("HOMING_DEMO_ACCOUNTS=1 is not permitted in production.");
+  }
+}
+
+assertDeploymentConfig(config);
+
 if (process.env.HOMING_DEMO_ACCOUNTS === "1") await seedDemoAccounts();
 
 const agentServices = createPostgresAgentServices();

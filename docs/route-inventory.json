@@ -211,6 +211,14 @@
     "status": 201
   },
   {
+    "method": "delete",
+    "path": "/api/v1/projects/{projectId}/invitations",
+    "classification": "browser-required",
+    "auth": "session",
+    "body": true,
+    "status": 204
+  },
+  {
     "method": "patch",
     "path": "/api/v1/projects/{projectId}/members",
     "classification": "compatibility",

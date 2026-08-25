@@ -88,11 +88,11 @@ describePostgres("PostgreSQL concurrency invariants", () => {
         (id, user_id, name, token_prefix, digest, scopes, project_ids, expires_at)
       values
         (${tokenOne}, 1, 'One A', 'one-a', ${"a".repeat(64)},
-         ${JSON.stringify(["projects:read", "runs:write"])}::jsonb,
+         ${JSON.stringify(["projects:read", "prompts:read", "runs:write"])}::jsonb,
          ${JSON.stringify([projectId])}::jsonb,
          now() + interval '30 days'),
         (${tokenTwo}, 1, 'One B', 'one-b', ${"b".repeat(64)},
-         ${JSON.stringify(["projects:read", "runs:write"])}::jsonb,
+         ${JSON.stringify(["projects:read", "prompts:read", "runs:write"])}::jsonb,
          ${JSON.stringify([projectId])}::jsonb,
          now() + interval '30 days')
     `;
@@ -106,7 +106,7 @@ describePostgres("PostgreSQL concurrency invariants", () => {
     const principalOne: AgentPrincipal = {
       userId: 1,
       tokenId: tokenOne,
-      scopes: ["projects:read", "runs:write"],
+      scopes: ["projects:read", "prompts:read", "runs:write"],
       projectIds: [projectId],
     };
     const principalTwo: AgentPrincipal = { ...principalOne, tokenId: tokenTwo };
@@ -200,6 +200,193 @@ describePostgres("PostgreSQL concurrency invariants", () => {
     expect(promptChanges.filter((result) => result.status === "rejected")).toHaveLength(1);
     expect((await collaboration.getProject(projectId))?.promptRevision).toBe(2);
     expect(await collaboration.listPromptRevisions(projectId)).toHaveLength(2);
+  });
+
+  it("linearizes membership revocation before a content authorization check", async () => {
+    let releaseRemoval!: () => void;
+    let removalLocked!: () => void;
+    const removalReady = new Promise<void>((resolve) => {
+      removalLocked = resolve;
+    });
+    const removalRelease = new Promise<void>((resolve) => {
+      releaseRemoval = resolve;
+    });
+    const removal = collaboration.transaction(async (transaction) => {
+      await transaction.assertOwner(projectId, 1);
+      removalLocked();
+      await removalRelease;
+      await transaction.removeMembershipSafely(projectId, 2, 1);
+    });
+    await removalReady;
+
+    const mutation = collaboration.transaction(async (transaction) => {
+      await transaction.assertMembership(projectId, 2);
+      await transaction.updatePrompt(projectId, 1, "Should not commit", {}, 2);
+    });
+    await delay(25);
+    releaseRemoval();
+    await removal;
+    await expect(mutation).rejects.toMatchObject({ code: "not_found" });
+    expect(await collaboration.getMembership(projectId, 2)).toBeNull();
+    expect((await collaboration.getProject(projectId))?.currentPrompt).toBe("Find a place");
+  });
+
+  it("rejects project and lead mutations queued behind trash operations", async () => {
+    let releaseProjectTrash!: () => void;
+    let projectTrashLocked!: () => void;
+    const projectTrashReady = new Promise<void>((resolve) => {
+      projectTrashLocked = resolve;
+    });
+    const projectTrashRelease = new Promise<void>((resolve) => {
+      releaseProjectTrash = resolve;
+    });
+    const projectTrash = collaboration.transaction(async (transaction) => {
+      await transaction.assertOwner(projectId, 1);
+      projectTrashLocked();
+      await projectTrashRelease;
+      await transaction.updateProject(projectId, { status: "trashed" });
+    });
+    await projectTrashReady;
+    const projectMutation = collaboration.transaction(async (transaction) => {
+      await transaction.assertMembership(projectId, 2);
+      await transaction.updatePrompt(projectId, 1, "Must not commit", {}, 2);
+    });
+    await delay(25);
+    releaseProjectTrash();
+    await projectTrash;
+    await expect(projectMutation).rejects.toMatchObject({ code: "not_found" });
+    expect((await collaboration.getProject(projectId))?.status).toBe("trashed");
+
+    await collaboration.updateProject(projectId, { status: "active" });
+    const leadId = "44444444-4444-4444-8444-444444444449";
+    const [created] = await collaboration.bulkUpsertLeads(projectId, 1, [
+      {
+        id: leadId,
+        source: "race-test",
+        url: "https://example.test/race",
+        title: "Race target",
+      },
+    ]);
+    if (!created?.lead) throw new Error("race lead was not created");
+
+    let releaseLeadTrash!: () => void;
+    let leadTrashLocked!: () => void;
+    const leadTrashReady = new Promise<void>((resolve) => {
+      leadTrashLocked = resolve;
+    });
+    const leadTrashRelease = new Promise<void>((resolve) => {
+      releaseLeadTrash = resolve;
+    });
+    const leadTrash = collaboration.transaction(async (transaction) => {
+      await transaction.assertMembership(projectId, 1);
+      leadTrashLocked();
+      await leadTrashRelease;
+      await transaction.setLeadStatus(projectId, leadId, "trashed", 1, created.lead?.revision);
+    });
+    await leadTrashReady;
+    const interestMutation = collaboration.transaction(async (transaction) => {
+      await transaction.assertMembership(projectId, 2);
+      await transaction.setInterest(projectId, leadId, 2, true);
+    });
+    await delay(25);
+    releaseLeadTrash();
+    await leadTrash;
+    await expect(interestMutation).rejects.toMatchObject({ code: "not_found" });
+    expect(await collaboration.getInterest(projectId, leadId, 2)).toBe(false);
+  });
+
+  it("paginates every browser lead sort without gaps or duplicates", async () => {
+    const sortableLeads = [
+      {
+        id: "44444444-4444-4444-8444-444444444441",
+        source: "alpha",
+        price: "1000.00",
+        listedAt: "2026-01-05",
+      },
+      {
+        id: "44444444-4444-4444-8444-444444444442",
+        source: "beta",
+        price: "2000.00",
+        listedAt: "2026-01-04",
+      },
+      {
+        id: "44444444-4444-4444-8444-444444444443",
+        source: "alpha",
+        price: null,
+        listedAt: null,
+      },
+      {
+        id: "44444444-4444-4444-8444-444444444444",
+        source: "gamma",
+        price: "1000.00",
+        listedAt: "2026-01-03",
+      },
+      {
+        id: "44444444-4444-4444-8444-444444444445",
+        source: "beta",
+        price: "3000.00",
+        listedAt: null,
+      },
+    ] as const;
+    for (const lead of sortableLeads) {
+      await sqlClient`
+        insert into leads
+          (id, project_id, source, canonical_url, title, price_amount, listed_at, creator_id)
+        values
+          (${lead.id}, ${projectId}, ${lead.source}, ${`https://example.test/${lead.id}`},
+           ${lead.id}, ${lead.price}, ${lead.listedAt}, 1)
+      `;
+    }
+
+    const expectations = {
+      price_asc: ["441", "444", "442", "445", "443"],
+      price_desc: ["445", "442", "444", "441", "443"],
+      source_asc: ["441", "443", "442", "445", "444"],
+      source_desc: ["444", "445", "442", "443", "441"],
+      days_asc: ["441", "442", "444", "443", "445"],
+      days_desc: ["444", "442", "441", "443", "445"],
+    } as const;
+
+    for (const [sort, expectedSuffixes] of Object.entries(expectations)) {
+      const seen: string[] = [];
+      let after: string | undefined;
+      do {
+        const page = await collaboration.listLeads(projectId, {
+          status: "active",
+          limit: 2,
+          sort: sort as keyof typeof expectations,
+          ...(after ? { after } : {}),
+        });
+        seen.push(...page.items.map((lead) => lead.id.slice(-3)));
+        after = page.next;
+      } while (after);
+      expect(seen, sort).toEqual(expectedSuffixes);
+    }
+  });
+
+  it("refuses invitations after their project is trashed", async () => {
+    const now = new Date("2026-08-20T16:00:00Z");
+    const invitationDigest = "9".repeat(64);
+    await sqlClient`
+      insert into project_invitations
+        (project_id, email, role, inviter_id, token_digest, expires_at)
+      values
+        (${projectId}, 'two@example.test', 'viewer', 1, ${invitationDigest},
+         ${new Date("2026-08-21T16:00:00Z").toISOString()})
+    `;
+    await collaboration.updateProject(projectId, { status: "trashed" });
+
+    await expect(auth.findPendingInvitation(invitationDigest, now)).resolves.toBeNull();
+    await expect(auth.acceptInvitation(invitationDigest, 2, now)).resolves.toBeNull();
+    await expect(
+      auth.registerInvitedUser({
+        invitationDigest,
+        email: "two@example.test",
+        displayName: "Two",
+        passwordHash: "unused",
+        now,
+      }),
+    ).resolves.toBeNull();
   });
 
   it("accounts for concurrent device polls under one row lock", async () => {

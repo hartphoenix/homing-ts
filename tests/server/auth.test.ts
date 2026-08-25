@@ -116,12 +116,12 @@ class FakeRepository implements AuthRepository {
     this.sessions.set(input.digest, { ...input });
   }
   async completeLogin(
-    oldDigest: string,
+    oldDigest: string | null,
     input: CreateSessionInput,
     userId: number,
     passwordHash?: string,
   ) {
-    this.sessions.delete(oldDigest);
+    if (oldDigest) this.sessions.delete(oldDigest);
     this.sessions.set(input.digest, { ...input });
     if (passwordHash && userId === this.user.id) this.user.passwordHash = passwordHash;
   }
@@ -321,6 +321,68 @@ describe("auth router", () => {
     });
     expect(response.status).toBe(200);
     expect(response.headers.get("X-Request-ID")).toBe("auth-mount-test");
+  });
+
+  it("issues stateless, expiring CSRF bootstrap cookies without database writes", async () => {
+    const repo = new FakeRepository();
+    let now = new Date("2026-08-20T12:00:00Z");
+    const router = createAuthRouter({
+      repo,
+      origin: "https://example.test",
+      throttleKey: "test-auth-hmac-key-at-least-32-bytes",
+      now: () => now,
+    });
+    const csrf = await router.request("https://example.test/csrf");
+    const csrfToken = ((await csrf.json()) as { csrf_token: string }).csrf_token;
+    const cookie = csrf.headers.get("set-cookie")?.split(";", 1)[0] ?? "";
+    expect(repo.sessions.size).toBe(0);
+
+    now = new Date("2026-08-20T12:16:00Z");
+    const expired = await router.request("https://example.test/session", {
+      method: "POST",
+      headers: {
+        Cookie: cookie,
+        Origin: "https://example.test",
+        "X-CSRF-Token": csrfToken,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ email: "hart@example.test", password: "wrong" }),
+    });
+    expect(expired.status).toBe(403);
+    expect((await expired.json()).error.code).toBe("csrf_failed");
+    expect(repo.sessions.size).toBe(0);
+  });
+
+  it("checks the IP throttle before allocating arbitrary email buckets", async () => {
+    const repo = new FakeRepository();
+    const router = createAuthRouter({
+      repo,
+      origin: "https://example.test",
+      clientAddress: () => "192.0.2.10",
+      now: () => new Date("2026-08-20T12:00:00Z"),
+    });
+    const csrf = await router.request("https://example.test/csrf");
+    const csrfToken = ((await csrf.json()) as { csrf_token: string }).csrf_token;
+    const cookie = csrf.headers.get("set-cookie")?.split(";", 1)[0] ?? "";
+    const statuses: number[] = [];
+    for (let index = 0; index < 6; index += 1) {
+      const response = await router.request("https://example.test/session", {
+        method: "POST",
+        headers: {
+          Cookie: cookie,
+          Origin: "https://example.test",
+          "X-CSRF-Token": csrfToken,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          email: `unknown-${index}@example.test`,
+          password: "wrong password",
+        }),
+      });
+      statuses.push(response.status);
+    }
+    expect(statuses).toEqual([401, 401, 401, 401, 401, 429]);
+    expect(repo.throttles.size).toBe(6);
   });
 
   it("binds CSRF to the exact Origin and rotates the session on login", async () => {

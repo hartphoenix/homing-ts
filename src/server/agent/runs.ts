@@ -99,6 +99,7 @@ export type RunCreateRequest = {
   projectId: string;
   userId: number;
   tokenId: string | null;
+  scopes?: readonly string[] | ReadonlySet<string>;
   agentLabel: string;
   inputCursor: string;
   continuationFromRunId?: string;
@@ -359,15 +360,16 @@ export function validateResultCounts(value: unknown): ResultCounts {
   return result;
 }
 
-function serializeRun(run: SearchRun) {
+function serializeRun(run: SearchRun, includePrompt = true) {
   return {
     id: run.id,
     project_id: run.projectId,
     status: run.status,
     agent_label: run.agentLabel,
     prompt_revision: run.promptRevision,
-    prompt_snapshot: run.promptSnapshot,
-    criteria_snapshot: run.criteriaSnapshot,
+    ...(includePrompt
+      ? { prompt_snapshot: run.promptSnapshot, criteria_snapshot: run.criteriaSnapshot }
+      : {}),
     lease_expires_at: run.leaseExpiresAt?.toISOString() ?? null,
     attempt_count: run.attemptCount,
     input_cursor: run.inputCursor,
@@ -405,6 +407,9 @@ export class RunService {
     input: Record<string, unknown>,
     idempotencyKey: string,
   ) {
+    if (!hasScope(principal, "runs:write")) throw forbidden("The token does not have runs:write.");
+    if (!hasScope(principal, "prompts:read"))
+      throw forbidden("The token does not have prompts:read.");
     const snapshot = await this.repository.snapshotProject(projectId, principal);
     if (!snapshot) throw notFound();
     const agentLabel = input.agent_label;
@@ -425,6 +430,7 @@ export class RunService {
       projectId,
       userId: principal.userId,
       tokenId: principal.tokenId ?? null,
+      ...(principal.scopes ? { scopes: [...principal.scopes] } : {}),
       agentLabel,
       inputCursor,
       idempotencyKey,
@@ -447,7 +453,7 @@ export class RunService {
     if (prefix) options.agentLabelPrefix = prefix;
     const result = await this.repository.list(projectId, options, principal);
     return {
-      items: result.runs.map(serializeRun),
+      items: result.runs.map((run) => serializeRun(run, hasScope(principal, "prompts:read"))),
       next_cursor: result.nextCursor,
       ordering: "-created_at",
     };
@@ -457,7 +463,7 @@ export class RunService {
     if (!isUuid(runId)) throw notFound();
     const run = await this.repository.get(projectId, runId, principal);
     if (!run) throw notFound();
-    return serializeRun(run);
+    return serializeRun(run, hasScope(principal, "prompts:read"));
   }
 
   async claim(projectId: string, runId: string, principal: AgentPrincipal) {
@@ -541,7 +547,10 @@ export class RunService {
       new Date(),
     );
     const deprecated = validateContinuation(input.continuation).deprecatedNextQuery;
-    return { body: serializeRun(result.run), deprecated };
+    return {
+      body: serializeRun(result.run, hasScope(principal, "prompts:read")),
+      deprecated,
+    };
   }
 }
 

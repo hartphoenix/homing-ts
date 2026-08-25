@@ -2,7 +2,7 @@ name: homing-ts
 
 services:
   db:
-    image: postgres:17.5-alpine
+    image: ${POSTGRES_IMAGE:?set POSTGRES_IMAGE to a pinned PostgreSQL image}
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB}
@@ -18,9 +18,51 @@ services:
       timeout: 5s
       retries: 6
 
+  provision:
+    image: ${POSTGRES_IMAGE:?set POSTGRES_IMAGE to a pinned PostgreSQL image}
+    restart: "no"
+    init: true
+    environment:
+      DATABASE_ADMIN_URL: ${DATABASE_ADMIN_URL:?set DATABASE_ADMIN_URL}
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER}
+      POSTGRES_APP_USER: ${POSTGRES_APP_USER:?set POSTGRES_APP_USER}
+      POSTGRES_APP_PASSWORD: ${POSTGRES_APP_PASSWORD:?set POSTGRES_APP_PASSWORD}
+      POSTGRES_MIGRATION_USER: ${POSTGRES_MIGRATION_USER:?set POSTGRES_MIGRATION_USER}
+      POSTGRES_MIGRATION_PASSWORD: ${POSTGRES_MIGRATION_PASSWORD:?set POSTGRES_MIGRATION_PASSWORD}
+    volumes:
+      - ./docker/provision-db.sh:/usr/local/bin/homing-provision-db:ro
+    networks: [database]
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["/usr/local/bin/homing-provision-db"]
+
+  migrate:
+    image: ${HOMING_IMAGE:?set HOMING_IMAGE to the immutable release image}
+    restart: "no"
+    init: true
+    environment:
+      DATABASE_URL: ${DATABASE_MIGRATION_URL:?set DATABASE_MIGRATION_URL}
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:?set PUBLIC_ORIGIN}
+      AUTH_THROTTLE_KEY: ${AUTH_THROTTLE_KEY:?set AUTH_THROTTLE_KEY}
+      NODE_ENV: production
+      HOMING_DEMO_ACCOUNTS: "0"
+    networks: [database]
+    depends_on:
+      db:
+        condition: service_healthy
+      provision:
+        condition: service_completed_successfully
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    command: ["bun", "run", "db:migrate"]
+
   web:
-    build: .
-    image: homing-ts-web:local
+    image: ${HOMING_IMAGE:?set HOMING_IMAGE to the immutable release image}
     restart: unless-stopped
     init: true
     environment:
@@ -28,12 +70,13 @@ services:
       PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:?set PUBLIC_ORIGIN}
       AUTH_THROTTLE_KEY: ${AUTH_THROTTLE_KEY:?set AUTH_THROTTLE_KEY}
       NODE_ENV: production
+      HOMING_DEMO_ACCOUNTS: "0"
       PORT: 8000
     expose: ["8000"]
     networks: [edge, database]
     depends_on:
-      db:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     read_only: true
     tmpfs:
       - /tmp:mode=1777
@@ -47,11 +90,23 @@ services:
       retries: 4
 
   caddy:
-    image: caddy:2.9.1-alpine
+    image: ${CADDY_IMAGE:?set CADDY_IMAGE to a pinned Caddy image}
     restart: unless-stopped
     init: true
     environment:
       APP_DOMAIN: ${APP_DOMAIN:?set APP_DOMAIN}
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        case "$${APP_DOMAIN}" in
+          http://localhost|http://127.0.0.1) ;;
+          ""|*[!A-Za-z0-9.-]*)
+            echo "APP_DOMAIN must be a bare hostname (localhost HTTP is allowed only for rehearsal)" >&2
+            exit 1
+            ;;
+        esac
+        exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
     ports:
       - "${HOMING_HTTP_PUBLISH:-80}:80"
       - "${HOMING_HTTPS_PUBLISH:-443}:443"
@@ -74,15 +129,10 @@ services:
 
 volumes:
   postgres_data:
-    name: ${POSTGRES_VOLUME_NAME:-homing-ts-postgres}
   caddy_data:
-    name: ${CADDY_DATA_VOLUME_NAME:-homing-ts-caddy-data}
   caddy_config:
-    name: ${CADDY_CONFIG_VOLUME_NAME:-homing-ts-caddy-config}
 
 networks:
   edge:
-    name: ${EDGE_NETWORK_NAME:-homing-ts-edge}
   database:
-    name: ${DATABASE_NETWORK_NAME:-homing-ts-database}
     internal: true

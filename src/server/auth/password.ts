@@ -9,6 +9,10 @@ export type PasswordCheck = {
 const ARGON2_WRAPPER =
   /^argon2\$(argon2(?:id|i)\$v=19\$m=\d{1,7},t=\d{1,5},p=\d{1,4}\$[A-Za-z0-9+/]+={0,2}\$[A-Za-z0-9+/]+={0,2})$/;
 const PBKDF2_FORMAT = /^pbkdf2_sha256\$(\d{4,10})\$([^$]{1,128})\$([A-Za-z0-9+/]+={0,2})$/;
+// Fixed public Argon2id fixture with the same parameters as native account
+// hashes, used only to equalize work for unknown or disabled accounts.
+const DUMMY_PASSWORD_HASH =
+  "$argon2id$v=19$m=65536,t=2,p=1$Ojzr054EwpN3/wKPwcet7BbDjJFDnnj0L3XVsJqu7uM$GxJbuvtqlXiz8ZN2R2bRYZeGz7RSuxknu+8UL1Qm7oE";
 
 function decodeDjangoBase64(value: string): Buffer | null {
   try {
@@ -89,6 +93,13 @@ export async function verifyPassword(password: string, encoded: string): Promise
   } catch {
     return { valid: false };
   }
+}
+
+export async function verifyPasswordOrDummy(
+  password: string,
+  encoded: string | null,
+): Promise<PasswordCheck> {
+  return verifyPassword(password, encoded ?? DUMMY_PASSWORD_HASH);
 }
 
 export function isSupportedImportedHash(encoded: string): boolean {

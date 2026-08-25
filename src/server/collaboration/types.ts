@@ -196,7 +196,6 @@ export interface CollaborationRepository {
 
   listProjects(userId: number): Promise<ProjectRecord[]>;
   getAgentPausedUntil(userId: number): Promise<Date | null>;
-  isUserActive(userId: number): Promise<boolean>;
   getProject(projectId: string): Promise<ProjectRecord | null>;
   createProject(input: Omit<ProjectRecord, "createdAt" | "updatedAt">): Promise<ProjectRecord>;
   updateProject(
@@ -207,7 +206,9 @@ export interface CollaborationRepository {
   getMembership(projectId: string, userId: number): Promise<MembershipRecord | null>;
   listMemberships(projectId: string): Promise<MembershipRecord[]>;
   countOwners(projectId: string): Promise<number>;
-  assertOwner(projectId: string, userId: number): Promise<void>;
+  /** Locks the project in SQL and verifies the actor still has membership. */
+  assertMembership(projectId: string, userId: number): Promise<void>;
+  assertOwner(projectId: string, userId: number, allowTrashed?: boolean): Promise<void>;
   upsertMembership(membership: MembershipRecord): Promise<MembershipRecord>;
   removeMembership(projectId: string, userId: number): Promise<void>;
   changeMembershipRole(
@@ -218,8 +219,8 @@ export interface CollaborationRepository {
   ): Promise<MembershipRecord>;
   removeMembershipSafely(projectId: string, userId: number, actorId: number): Promise<void>;
   createInvitation(invitation: InvitationRecord): Promise<InvitationRecord>;
-  getInvitationByTokenDigest(tokenDigest: string): Promise<InvitationRecord | null>;
-  updateInvitation(id: string, patch: Partial<InvitationRecord>): Promise<InvitationRecord>;
+  listPendingInvitations(projectId: string, now: Date): Promise<InvitationRecord[]>;
+  revokeInvitation(projectId: string, invitationId: string, at: Date): Promise<boolean>;
 
   getPrompt(projectId: string): Promise<PromptRevisionRecord | null>;
   listPromptRevisions(projectId: string): Promise<PromptRevisionRecord[]>;

@@ -5,6 +5,7 @@ dist/
 .vite/
 .vitest/
 backups/
+.homing-ops.lock/
 .cache/
 .build-logs/
 .orchestrator/

@@ -199,10 +199,6 @@ export class InMemoryCollaborationRepository implements CollaborationRepository 
     return value ? copy(value) : null;
   }
 
-  async isUserActive(): Promise<boolean> {
-    return true;
-  }
-
   async getProject(projectId: string): Promise<ProjectRecord | null> {
     const project = this.projects.get(projectId);
     return project ? copy(project) : null;
@@ -246,7 +242,20 @@ export class InMemoryCollaborationRepository implements CollaborationRepository 
     ).length;
   }
 
-  async assertOwner(projectId: string, userId: number): Promise<void> {
+  async assertMembership(projectId: string, userId: number): Promise<void> {
+    if (this.projects.get(projectId)?.status !== "active") {
+      throw new HomingError("not_found", "Object not found.", 404);
+    }
+    if (!(await this.getMembership(projectId, userId))) {
+      throw new HomingError("not_found", "Object not found.", 404);
+    }
+  }
+
+  async assertOwner(projectId: string, userId: number, allowTrashed = false): Promise<void> {
+    const project = this.projects.get(projectId);
+    if (!project || (!allowTrashed && project.status !== "active")) {
+      throw new HomingError("not_found", "Object not found.", 404);
+    }
     if ((await this.getMembership(projectId, userId))?.role !== "owner") {
       throw new HomingError("forbidden", "Owner permission is required.", 403);
     }
@@ -300,18 +309,31 @@ export class InMemoryCollaborationRepository implements CollaborationRepository 
     return copy(value);
   }
 
-  async getInvitationByTokenDigest(tokenDigest: string): Promise<InvitationRecord | null> {
-    const invitation = [...this.invitations.values()].find(
-      (candidate) => candidate.tokenDigest === tokenDigest,
-    );
-    return invitation ? copy(invitation) : null;
+  async listPendingInvitations(projectId: string, at: Date): Promise<InvitationRecord[]> {
+    return [...this.invitations.values()]
+      .filter(
+        (invitation) =>
+          invitation.projectId === projectId &&
+          invitation.expiresAt > at &&
+          invitation.acceptedAt === null &&
+          invitation.revokedAt === null,
+      )
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      .map(copy);
   }
 
-  async updateInvitation(id: string, patch: Partial<InvitationRecord>): Promise<InvitationRecord> {
-    const invitation = this.invitations.get(id);
-    if (!invitation) throw new HomingError("not_found", "Object not found.", 404);
-    Object.assign(invitation, copy(patch));
-    return copy(invitation);
+  async revokeInvitation(projectId: string, invitationId: string, at: Date): Promise<boolean> {
+    const invitation = this.invitations.get(invitationId);
+    if (
+      !invitation ||
+      invitation.projectId !== projectId ||
+      invitation.acceptedAt !== null ||
+      invitation.revokedAt !== null ||
+      invitation.expiresAt <= at
+    )
+      return false;
+    invitation.revokedAt = copy(at);
+    return true;
   }
 
   async getPrompt(projectId: string): Promise<PromptRevisionRecord | null> {
@@ -458,7 +480,7 @@ export class InMemoryCollaborationRepository implements CollaborationRepository 
     patch: Partial<LeadRecord>,
   ): Promise<LeadRecord> {
     const lead = this.leads.get(projectKey(projectId, leadId));
-    if (!lead) throw new HomingError("not_found", "Object not found.", 404);
+    if (lead?.status !== "active") throw new HomingError("not_found", "Object not found.", 404);
     if (lead.revision !== expectedRevision) {
       throw new HomingError("stale_write", "The lead changed since it was read.", 409, {
         current_revision: lead.revision,
@@ -659,6 +681,8 @@ export class InMemoryCollaborationRepository implements CollaborationRepository 
     userId: number,
     interested: boolean,
   ): Promise<boolean> {
+    const lead = this.leads.get(projectKey(projectId, leadId));
+    if (lead?.status !== "active") throw new HomingError("not_found", "Object not found.", 404);
     const key = this.interestKey(projectId, leadId, userId);
     if (interested) this.interests.add(key);
     else this.interests.delete(key);

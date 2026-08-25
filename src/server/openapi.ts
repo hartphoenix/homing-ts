@@ -73,6 +73,10 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     body: true,
     status: 201,
   }),
+  route("delete", "/api/v1/projects/{projectId}/invitations", "browser-required", "session", {
+    body: true,
+    status: 204,
+  }),
   route("patch", "/api/v1/projects/{projectId}/members", "compatibility", "session", {
     body: true,
   }),
