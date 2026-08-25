@@ -18,6 +18,9 @@ const fakeDocker = `#!/bin/sh
 set -eu
 printf '%s\\n' "$*" >> "$FAKE_DOCKER_LOG"
 case "$*" in
+  *'caddy validate --config /etc/caddy/Caddyfile'*)
+    exit "$FAKE_CADDY_VALIDATE_STATUS"
+    ;;
   *pg_dump*)
     if [ "$FAKE_DUMP_STATUS" -ne 0 ]; then exit "$FAKE_DUMP_STATUS"; fi
     printf '%s' 'archive-fixture'
@@ -126,6 +129,7 @@ function runScript(
         FAKE_INVENTORY_STATUS: "0",
         FAKE_INVENTORY_EARLY_CLOSE: "0",
         FAKE_RESTORE_STATUS: "0",
+        FAKE_CADDY_VALIDATE_STATUS: "0",
         FAKE_TARGET_WEB_RUNNING: "0",
         FAKE_DROP_STATUS: "0",
         FAKE_IMPORT_STATUS: "0",
@@ -190,6 +194,8 @@ describe("deployment script failure paths", () => {
     await writeFile(join(root, "bin", "age"), fakeAge);
     await chmod(join(root, "bin", "docker"), 0o755);
     await chmod(join(root, "bin", "age"), 0o755);
+    await writeFile(join(root, "Caddyfile"), "{}\n");
+    await chmod(join(root, "Caddyfile"), 0o644);
     await writeFile(
       join(root, ".env"),
       [
@@ -310,6 +316,48 @@ describe("deployment script failure paths", () => {
     const result = await runScript(preflightScript, root);
     expect(result.code).toBe(0);
     expect(result.output).toContain("production preflight passed");
+  });
+
+  it("preflight rejects a Caddyfile hidden from the container user", async () => {
+    await installMocksAndEnvironment();
+    await chmod(join(root, "Caddyfile"), 0o600);
+    const result = await runScript(preflightScript, root);
+    expect(result.code).not.toBe(0);
+    expect(result.output).toContain("mode 0644");
+    expect(
+      await stat(join(root, "docker.log")).then(
+        () => true,
+        () => false,
+      ),
+    ).toBe(false);
+  });
+
+  it("preflight validates the Caddyfile in the pinned Caddy image", async () => {
+    await installMocksAndEnvironment();
+    const result = await runScript(preflightScript, root, {
+      FAKE_CADDY_VALIDATE_STATUS: "41",
+    });
+    expect(result.code).not.toBe(0);
+    expect(result.output).toContain("Caddyfile validation failed in the pinned Caddy image");
+    const log = await readFile(join(root, "docker.log"), "utf8");
+    expect(log).toContain(`caddy@sha256:${"c".repeat(64)}`);
+    expect(log).toContain("--network none");
+    expect(log).toContain("caddy validate --config /etc/caddy/Caddyfile");
+  });
+
+  it("preflight rejects the ACME email directive even when Caddy validation succeeds", async () => {
+    await installMocksAndEnvironment();
+    await writeFile(join(root, "Caddyfile"), "{\n  email off\n}\n");
+    await chmod(join(root, "Caddyfile"), 0o644);
+    const result = await runScript(preflightScript, root);
+    expect(result.code).not.toBe(0);
+    expect(result.output).toContain("must omit the ACME email directive");
+    expect(
+      await stat(join(root, "docker.log")).then(
+        () => true,
+        () => false,
+      ),
+    ).toBe(false);
   });
 
   it("preflight accepts a content-addressed local Homing image", async () => {
