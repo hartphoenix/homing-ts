@@ -186,12 +186,12 @@ describe("collaboration routes", () => {
     expect(forbidden.status).toBe(403);
   });
 
-  it("binds invitations to a normalized email and consumes them once", async () => {
+  it("binds invitations to a normalized email and stores only the token digest", async () => {
     const repository = new InMemoryCollaborationRepository({
       projects: [seededProject()],
       memberships: [member(1, "owner", "owner@example.test")],
     });
-    const { app, setPrincipal } = harness(repository);
+    const { app } = harness(repository);
     const created = await app.request(
       jsonRequest("POST", `/projects/${projectId}/invitations`, {
         email: "  NEW@Example.Test ",
@@ -202,19 +202,68 @@ describe("collaboration routes", () => {
     const invitation = (await created.json()) as { token: string };
     expect(invitation.token).toBeTruthy();
 
-    setPrincipal({ userId: 2, email: "wrong@example.test", authKind: "session" });
-    expect(
-      (await app.request(jsonRequest("POST", `/invitations/${invitation.token}/accept`))).status,
-    ).toBe(404);
+    const pending = await repository.listPendingInvitations(projectId, fixedNow);
+    expect(pending).toHaveLength(1);
+    expect(pending[0]?.email).toBe("new@example.test");
+    expect(pending[0]?.tokenDigest).toMatch(/^[0-9a-f]{64}$/);
+    expect(pending[0]?.tokenDigest).not.toBe(invitation.token);
+  });
 
-    setPrincipal({ userId: 2, email: "new@example.test", authKind: "session" });
+  it("lists active invitations and restricts creation/revocation to owners", async () => {
+    const repository = new InMemoryCollaborationRepository({
+      projects: [seededProject()],
+      memberships: [member(1, "owner", "owner@example.test"), member(2, "viewer")],
+    });
+    const { app, setPrincipal } = harness(repository);
+    const created = await app.request(
+      jsonRequest("POST", `/projects/${projectId}/invitations`, {
+        email: "pending@example.test",
+        role: "viewer",
+      }),
+    );
+    expect(created.status).toBe(201);
+    const invitation = (await created.json()) as { id: string };
+    const members = await app.request(`/projects/${projectId}/members`);
+    expect(await members.json()).toMatchObject({
+      pending_invitations: [
+        { id: invitation.id, email: "pending@example.test", role: "viewer", status: "pending" },
+      ],
+    });
+
+    setPrincipal({ userId: 2, email: "person2@example.test", authKind: "session" });
     expect(
-      (await app.request(jsonRequest("POST", `/invitations/${invitation.token}/accept`))).status,
-    ).toBe(200);
-    expect((await repository.getMembership(projectId, 2))?.role).toBe("editor");
+      (
+        await app.request(
+          jsonRequest("POST", `/projects/${projectId}/invitations`, {
+            email: "second@example.test",
+            role: "viewer",
+          }),
+        )
+      ).status,
+    ).toBe(403);
     expect(
-      (await app.request(jsonRequest("POST", `/invitations/${invitation.token}/accept`))).status,
-    ).toBe(404);
+      (
+        await app.request(
+          jsonRequest("DELETE", `/projects/${projectId}/invitations`, {
+            invitation_id: invitation.id,
+          }),
+        )
+      ).status,
+    ).toBe(403);
+
+    setPrincipal({ userId: 1, email: "owner@example.test", authKind: "session" });
+    expect(
+      (
+        await app.request(
+          jsonRequest("DELETE", `/projects/${projectId}/invitations`, {
+            invitation_id: invitation.id,
+          }),
+        )
+      ).status,
+    ).toBe(204);
+    expect(await (await app.request(`/projects/${projectId}/members`)).json()).toMatchObject({
+      pending_invitations: [],
+    });
   });
 
   it("isolates bulk item errors, reports indices, stats, and the browser trash path", async () => {
@@ -403,7 +452,13 @@ describe("collaboration routes", () => {
       scopes: ["projects:read"],
       projectIds: [projectId],
     });
-    expect((await app.request(`/projects/${projectId}`)).status).toBe(200);
+    const project = await app.request(`/projects/${projectId}`);
+    expect(project.status).toBe(200);
+    expect(await project.json()).not.toMatchObject({
+      prompt: expect.anything(),
+      criteria: expect.anything(),
+    });
+    expect((await app.request(`/projects/${projectId}/prompt`)).status).toBe(403);
     expect(
       (
         await app.request(
@@ -419,6 +474,87 @@ describe("collaboration routes", () => {
       projectIds: [inviteId],
     });
     expect((await app.request(`/projects/${projectId}`)).status).toBe(404);
+  });
+
+  it("does not leak interest or comment metadata through leads:read", async () => {
+    const repository = new InMemoryCollaborationRepository({
+      projects: [seededProject()],
+      memberships: [member(1, "owner", "owner@example.test")],
+    });
+    await repository.bulkUpsertLeads(projectId, 1, [
+      {
+        id: leadOne,
+        source: "board",
+        url: "https://example.test/one",
+        title: "Private collaboration",
+      },
+    ]);
+    await repository.setInterest(projectId, leadOne, 1, true);
+    await repository.createComment({
+      id: 0,
+      leadId: leadOne,
+      authorId: 1,
+      parentId: null,
+      body: "Private comment",
+      createdAt: fixedNow,
+      editedAt: null,
+      deletedAt: null,
+    });
+    const { app, setPrincipal } = harness(repository, {
+      userId: 1,
+      authKind: "bearer",
+      scopes: ["leads:read"],
+      projectIds: [projectId],
+    });
+
+    const response = await app.request(`/projects/${projectId}/leads`);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { items: Array<Record<string, unknown>> };
+    expect(body.items[0]).not.toHaveProperty("interest_count");
+    expect(body.items[0]).not.toHaveProperty("interested_users");
+    expect(body.items[0]).not.toHaveProperty("comment_count");
+    expect((await app.request(`/projects/${projectId}/leads?interest_scope=me`)).status).toBe(403);
+    expect((await app.request(`/projects/${projectId}/leads?sort=interest`)).status).toBe(403);
+
+    setPrincipal({
+      userId: 1,
+      authKind: "bearer",
+      scopes: ["leads:write"],
+      projectIds: [projectId],
+    });
+    const batchInterest = await app.request(
+      jsonRequest("POST", `/projects/${projectId}/leads/batch`, {
+        action: "uninterested",
+        lead_ids: [leadOne],
+      }),
+    );
+    expect(batchInterest.status).toBe(403);
+    expect(await repository.getInterest(projectId, leadOne, 1)).toBe(true);
+
+    setPrincipal({
+      userId: 1,
+      authKind: "bearer",
+      scopes: ["leads:read", "interest:read", "comments:read"],
+      projectIds: [projectId],
+    });
+    expect(await (await app.request(`/projects/${projectId}/leads`)).json()).toMatchObject({
+      items: [{ interest_count: 1, interested_users: ["Person 1"], comment_count: 1 }],
+    });
+  });
+
+  it("requires an active project under transactional authorization", async () => {
+    const project = { ...seededProject(), status: "trashed" as const };
+    const repository = new InMemoryCollaborationRepository({
+      projects: [project],
+      memberships: [member(1, "owner"), member(2, "editor")],
+    });
+    await expect(repository.assertMembership(projectId, 2)).rejects.toMatchObject({
+      code: "not_found",
+    });
+    await expect(repository.assertOwner(projectId, 1)).rejects.toMatchObject({
+      code: "not_found",
+    });
+    await expect(repository.assertOwner(projectId, 1, true)).resolves.toBeUndefined();
   });
 
   it("hides unrestricted memberships from project-restricted tokens", async () => {

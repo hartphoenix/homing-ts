@@ -173,17 +173,19 @@ export class DrizzleAuthRepository implements AuthRepository {
   }
 
   async completeLogin(
-    oldDigest: string,
+    oldDigest: string | null,
     input: CreateSessionInput,
     userId: number,
     passwordHash?: string,
   ): Promise<void> {
     await this.db.transaction(async (transaction) => {
-      const deleted = await transaction
-        .delete(sessions)
-        .where(eq(sessions.digest, oldDigest))
-        .returning({ digest: sessions.digest });
-      if (deleted.length !== 1) throw new Error("login session was already consumed");
+      if (oldDigest) {
+        const deleted = await transaction
+          .delete(sessions)
+          .where(eq(sessions.digest, oldDigest))
+          .returning({ digest: sessions.digest });
+        if (deleted.length !== 1) throw new Error("login session was already consumed");
+      }
       if (passwordHash) {
         await transaction
           .update(users)
@@ -237,6 +239,8 @@ export class DrizzleAuthRepository implements AuthRepository {
           isNull(projectInvitations.acceptedAt),
           isNull(projectInvitations.revokedAt),
           eq(users.isActive, true),
+          eq(projects.status, "active"),
+          eq(projectMemberships.role, "owner"),
         ),
       )
       .limit(1);
@@ -254,6 +258,26 @@ export class DrizzleAuthRepository implements AuthRepository {
 
   async registerInvitedUser(input: RegisterInvitedUserInput): Promise<RegisteredInvitation | null> {
     return this.db.transaction(async (transaction) => {
+      const [candidate] = await transaction
+        .select({ projectId: projectInvitations.projectId })
+        .from(projectInvitations)
+        .where(
+          and(
+            eq(projectInvitations.tokenDigest, input.invitationDigest),
+            gt(projectInvitations.expiresAt, input.now),
+            isNull(projectInvitations.acceptedAt),
+            isNull(projectInvitations.revokedAt),
+          ),
+        )
+        .limit(1);
+      if (!candidate) return null;
+      const [lockedProject] = await transaction
+        .select({ status: projects.status })
+        .from(projects)
+        .where(eq(projects.id, candidate.projectId))
+        .limit(1)
+        .for("update");
+      if (lockedProject?.status !== "active") return null;
       const [invitation] = await transaction
         .select()
         .from(projectInvitations)
@@ -277,6 +301,7 @@ export class DrizzleAuthRepository implements AuthRepository {
           and(
             eq(projectMemberships.userId, users.id),
             eq(projectMemberships.projectId, invitation.projectId),
+            eq(projectMemberships.role, "owner"),
           ),
         )
         .where(eq(users.id, invitation.inviterId))
@@ -351,6 +376,26 @@ export class DrizzleAuthRepository implements AuthRepository {
 
   async acceptInvitation(digest: string, userId: number, now: Date): Promise<string | null> {
     return this.db.transaction(async (transaction) => {
+      const [candidate] = await transaction
+        .select({ projectId: projectInvitations.projectId })
+        .from(projectInvitations)
+        .where(
+          and(
+            eq(projectInvitations.tokenDigest, digest),
+            gt(projectInvitations.expiresAt, now),
+            isNull(projectInvitations.acceptedAt),
+            isNull(projectInvitations.revokedAt),
+          ),
+        )
+        .limit(1);
+      if (!candidate) return null;
+      const [lockedProject] = await transaction
+        .select({ status: projects.status })
+        .from(projects)
+        .where(eq(projects.id, candidate.projectId))
+        .limit(1)
+        .for("update");
+      if (lockedProject?.status !== "active") return null;
       const [invitation] = await transaction
         .select()
         .from(projectInvitations)
@@ -386,6 +431,7 @@ export class DrizzleAuthRepository implements AuthRepository {
           and(
             eq(projectMemberships.userId, users.id),
             eq(projectMemberships.projectId, invitation.projectId),
+            eq(projectMemberships.role, "owner"),
           ),
         )
         .where(eq(users.id, invitation.inviterId))

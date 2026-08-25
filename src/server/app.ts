@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { sql } from "drizzle-orm";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
@@ -20,6 +21,7 @@ import type { AppVariables } from "./types";
 
 type AppDependencies = {
   ready?: () => Promise<boolean>;
+  spaIndex?: () => Response | Promise<Response>;
   auth?: AuthRouterDependencies;
   agent?: Omit<AgentCoreRouterOptions, "principal">;
   collaboration?: Omit<CollaborationDependencies, "principal">;
@@ -37,13 +39,21 @@ async function databaseReady(): Promise<boolean> {
 export function createApp(dependencies: AppDependencies = {}) {
   const app = new Hono<{ Variables: AppVariables }>();
   const ready = dependencies.ready ?? databaseReady;
+  const spaIndex =
+    dependencies.spaIndex ??
+    (async () =>
+      typeof Bun === "undefined"
+        ? new Response(await readFile("dist/client/index.html"), {
+            headers: { "Content-Type": "text/html; charset=utf-8" },
+          })
+        : new Response(Bun.file("dist/client/index.html")));
 
   app.use("*", requestId({ headerName: "X-Request-ID", limitLength: 80 }));
   app.use("*", requestLogger());
   app.use("*", async (context, next) => {
     context.set("requestId", context.get("requestId"));
-    await next();
     context.header("X-Request-ID", context.get("requestId"));
+    await next();
   });
   app.use(
     "*",
@@ -64,7 +74,28 @@ export function createApp(dependencies: AppDependencies = {}) {
       xFrameOptions: "DENY",
     }),
   );
-  app.use("/api/*", bodyLimit({ maxSize: 2 * 1024 * 1024 }));
+  app.use("/api/*", async (context, next) => {
+    context.header("Cache-Control", "private, no-store");
+    await next();
+  });
+  app.use(
+    "/api/*",
+    bodyLimit({
+      maxSize: 2 * 1024 * 1024,
+      onError: (context) =>
+        context.json(
+          {
+            error: {
+              code: "payload_too_large",
+              message: "The request body is too large.",
+              fields: {},
+              request_id: context.get("requestId"),
+            },
+          },
+          413,
+        ),
+    }),
+  );
 
   app.get("/health/live", (context) => context.json({ status: "ok" }));
   app.get("/health/ready", async (context) => {
@@ -90,6 +121,12 @@ export function createApp(dependencies: AppDependencies = {}) {
       }
       return principal;
     };
+
+    // `/agent-setup/SKILL.md` is a public kit compatibility redirect, but the
+    // bare route is a browser page. Register the exact SPA entries before the
+    // kit wildcard so direct navigation and refresh do not become JSON 404s.
+    app.on(["GET", "HEAD"], "/agent-setup", spaIndex);
+    app.on(["GET", "HEAD"], "/agent-setup/", spaIndex);
 
     if (dependencies.agent) {
       app.route(
@@ -145,7 +182,36 @@ export function createApp(dependencies: AppDependencies = {}) {
     }
     return new Response(file);
   });
-  app.get("*", async () => new Response(Bun.file("dist/client/index.html")));
+  const backgroundFiles = new Set([
+    "exterior-golden-stoop.jpg",
+    "exterior-leafy-block.jpg",
+    "interior-brownstone.jpg",
+    "interior-staircase.jpg",
+  ]);
+  app.on(["GET", "HEAD"], "/backgrounds/:name", async (context) => {
+    const name = context.req.param("name");
+    if (!backgroundFiles.has(name)) {
+      throw new HomingError("not_found", "Object not found.", 404);
+    }
+    const candidates = [`dist/client/backgrounds/${name}`, `public/backgrounds/${name}`];
+    let file: Bun.BunFile | null = null;
+    for (const candidate of candidates) {
+      const current = Bun.file(candidate);
+      if (await current.exists()) {
+        file = current;
+        break;
+      }
+    }
+    if (!file) throw new HomingError("not_found", "Object not found.", 404);
+    return new Response(context.req.method === "HEAD" ? null : file, {
+      headers: {
+        "Cache-Control": "public, max-age=86400",
+        "Content-Type": "image/jpeg",
+        "X-Content-Type-Options": "nosniff",
+      },
+    });
+  });
+  app.get("*", spaIndex);
 
   app.notFound((context) =>
     errorResponse(context, new HomingError("not_found", "Object not found.", 404)),

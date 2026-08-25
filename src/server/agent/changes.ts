@@ -44,7 +44,14 @@ export class ChangeService {
     if (!Number.isInteger(limit) || limit < 1 || limit > 100)
       throw validation("limit must be an integer between 1 and 100");
     const changes = await this.repository.list(projectId, cursor.sequence, limit, principal);
-    const items = changes.map((change) => ({
+    const visibleChanges = changes.filter((change) => {
+      if (change.eventType.startsWith("prompt.")) return hasScope(principal, "prompts:read");
+      if (change.eventType.startsWith("lead.")) return hasScope(principal, "leads:read");
+      if (change.eventType.startsWith("interest.")) return hasScope(principal, "interest:read");
+      if (change.eventType.startsWith("comment.")) return hasScope(principal, "comments:read");
+      return true;
+    });
+    const items = visibleChanges.map((change) => ({
       sequence: typeof change.sequence === "bigint" ? Number(change.sequence) : change.sequence,
       event_type: change.eventType,
       object_type: change.objectType,

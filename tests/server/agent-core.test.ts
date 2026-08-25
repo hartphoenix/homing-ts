@@ -12,6 +12,7 @@ import { createAgentCoreRouter } from "../../src/server/agent/router";
 import {
   type AgentPrincipal,
   InMemoryRunRepository,
+  type RunCreateRequest,
   RunService,
 } from "../../src/server/agent/runs";
 import {
@@ -23,7 +24,14 @@ const PROJECT_ID = "11111111-1111-4111-8111-111111111111";
 const principal: AgentPrincipal = {
   userId: 7,
   tokenId: "22222222-2222-4222-8222-222222222222",
-  scopes: ["projects:read", "runs:write"],
+  scopes: [
+    "projects:read",
+    "prompts:read",
+    "leads:read",
+    "comments:read",
+    "interest:read",
+    "runs:write",
+  ],
   projectIds: [PROJECT_ID],
 };
 
@@ -139,6 +147,58 @@ describe("agent run lifecycle", () => {
     const changed = await createRun("create-1", "homing/cloud-b");
     expect(changed.status).toBe(409);
     expect(await body(changed)).toMatchObject({ error: { code: "idempotency_key_reused" } });
+  });
+
+  it("preserves omitted scopes for unrestricted run repositories", async () => {
+    class ObservingRunRepository extends InMemoryRunRepository {
+      lastRequest?: RunCreateRequest;
+
+      override async create(request: RunCreateRequest) {
+        this.lastRequest = request;
+        return super.create(request);
+      }
+    }
+
+    const unrestricted = new ObservingRunRepository();
+    unrestricted.seedProject({
+      id: PROJECT_ID,
+      promptRevision: 4,
+      promptSnapshot: "Find the current housing fit.",
+      criteriaSnapshot: { max_price: 3_000 },
+    });
+    await new RunService(unrestricted).create(
+      PROJECT_ID,
+      { userId: 7, tokenId: null },
+      { agent_label: "homing/cloud-a" },
+      "unrestricted-scope-test",
+    );
+    expect(unrestricted.lastRequest?.scopes).toBeUndefined();
+  });
+
+  it("requires prompt scope to create runs and redacts snapshots from metadata readers", async () => {
+    const created = await body(await createRun("scope-snapshot"));
+    const runId = String(created.id);
+    const service = new RunService(repository);
+    const metadataPrincipal: AgentPrincipal = {
+      userId: principal.userId,
+      tokenId: principal.tokenId ?? null,
+      scopes: ["projects:read"],
+      projectIds: [PROJECT_ID],
+    };
+    const listed = await service.list(PROJECT_ID, metadataPrincipal, new URLSearchParams());
+    expect(listed.items[0]).not.toHaveProperty("prompt_snapshot");
+    expect(listed.items[0]).not.toHaveProperty("criteria_snapshot");
+    expect(await service.detail(PROJECT_ID, runId, metadataPrincipal)).not.toHaveProperty(
+      "prompt_snapshot",
+    );
+    await expect(
+      service.create(
+        PROJECT_ID,
+        { ...metadataPrincipal, scopes: ["runs:write"] },
+        { agent_label: "scope-test" },
+        "scope-test",
+      ),
+    ).rejects.toMatchObject({ code: "forbidden" });
   });
 
   it("uses stable keyset run pagination", async () => {
@@ -366,6 +426,50 @@ describe("epoch change feed", () => {
       expect(expired.status).toBe(410);
       expect(await body(expired)).toMatchObject({ error: { code: "cursor_expired" } });
     }
+  });
+
+  it("filters scoped change payloads while advancing past hidden events", async () => {
+    const repository = new InMemoryChangeRepository();
+    repository.seedProject(PROJECT_ID, "epochScope1");
+    for (const [sequence, eventType] of [
+      [1, "interest.set"],
+      [2, "lead.updated"],
+      [3, "project.updated"],
+    ] as const) {
+      repository.add(PROJECT_ID, {
+        sequence,
+        eventType,
+        objectType: eventType.split(".")[0] as string,
+        objectId: String(sequence),
+        payload:
+          eventType === "interest.set"
+            ? { user_id: 7, interested: true, revision: sequence }
+            : { revision: sequence },
+        tombstone: false,
+        occurredAt: new Date(`2026-08-20T12:00:0${sequence}Z`),
+      });
+    }
+    const service = new ChangeService(repository);
+    const limited = await service.list(
+      PROJECT_ID,
+      { ...principal, scopes: ["projects:read"] },
+      new URLSearchParams(),
+    );
+    expect(limited).toMatchObject({
+      items: [{ event_type: "project.updated" }],
+      next_cursor: "epochScope1:3",
+    });
+    expect(JSON.stringify(limited)).not.toContain("interested");
+
+    const interestReader = await service.list(
+      PROJECT_ID,
+      { ...principal, scopes: ["projects:read", "interest:read"] },
+      new URLSearchParams(),
+    );
+    expect(interestReader.items.map((item) => item.event_type)).toEqual([
+      "interest.set",
+      "project.updated",
+    ]);
   });
 });
 

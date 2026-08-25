@@ -4,12 +4,13 @@ import type postgres from "postgres";
 
 import { getSqlClient } from "../db/client";
 import { type ChangeRepository, ChangeService, type ProjectChange } from "./changes";
-import { conflict, notFound } from "./errors";
+import { conflict, forbidden, notFound } from "./errors";
 import {
   type AgentPrincipal,
   decodeRunCursor,
   digest,
   encodeRunCursor,
+  hasScope,
   type ProjectAuthorizer,
   type ProjectSnapshot,
   type RunCompletion,
@@ -211,6 +212,26 @@ async function storeIdempotency(
   `;
 }
 
+/** Re-checks membership while holding the project lock used by every run mutation. */
+async function assertProjectMember(
+  sql: SqlExecutor,
+  projectId: string,
+  principal: AgentPrincipal,
+  scope?: string,
+): Promise<void> {
+  const project = await sql<Row[]>`
+    select id from projects where id = ${projectId} and status = 'active' for update
+  `;
+  if (!project[0]) throw notFound();
+  const membership = await sql<Row[]>`
+    select project_id
+      from project_memberships
+     where project_id = ${projectId} and user_id = ${principal.userId}
+  `;
+  if (!membership[0]) throw notFound();
+  if (scope && !hasScope(principal, scope)) throw forbidden(`The token does not have ${scope}.`);
+}
+
 export class PostgresAgentRepository
   implements RunRepository, ChangeRepository, SourcePlanRepository
 {
@@ -248,7 +269,9 @@ export class PostgresAgentRepository
       const principal: AgentPrincipal = {
         userId: request.userId,
         tokenId: request.tokenId,
+        ...(request.scopes !== undefined ? { scopes: request.scopes } : {}),
       };
+      await assertProjectMember(sql, request.projectId, principal, "runs:write");
       const endpoint = `/projects/${request.projectId}/search-runs`;
       const requestHash = digest({
         agent_label: request.agentLabel,
@@ -327,8 +350,7 @@ export class PostgresAgentRepository
     now: Date,
   ): Promise<{ run: SearchRun; claimToken: string }> {
     return this.sql.begin(async (sql) => {
-      const project = await sql<Row[]>`select id from projects where id = ${projectId} for update`;
-      if (!project[0]) throw notFound();
+      await assertProjectMember(sql, projectId, principal, "runs:write");
       const rows = await sql<Row[]>`
         select * from search_runs where project_id = ${projectId} and id = ${runId} for update
       `;
@@ -387,8 +409,7 @@ export class PostgresAgentRepository
     now: Date,
   ): Promise<SearchRun> {
     return this.sql.begin(async (sql) => {
-      const project = await sql<Row[]>`select id from projects where id = ${projectId} for update`;
-      if (!project[0]) throw notFound();
+      await assertProjectMember(sql, projectId, principal, "runs:write");
       const rows = await sql<Row[]>`
         select * from search_runs where project_id = ${projectId} and id = ${runId} for update
       `;
@@ -431,8 +452,7 @@ export class PostgresAgentRepository
     now: Date,
   ): Promise<{ run: SearchRun; replayed: boolean }> {
     return this.sql.begin(async (sql) => {
-      const project = await sql<Row[]>`select id from projects where id = ${projectId} for update`;
-      if (!project[0]) throw notFound();
+      await assertProjectMember(sql, projectId, principal, "runs:write");
       const rows = await sql<Row[]>`
         select * from search_runs where project_id = ${projectId} and id = ${runId} for update
       `;
@@ -616,6 +636,7 @@ export class PostgresAgentRepository
         select prompt_revision from projects where id = ${projectId} and status = 'active' for update
       `;
       if (!project[0]) throw notFound();
+      await assertProjectMember(sql, projectId, { userId, tokenId });
       const current = Number(project[0].prompt_revision);
       if (current !== promptRevision) {
         throw conflict(
@@ -693,6 +714,7 @@ export class PostgresAgentRepository
         select prompt_revision from projects where id = ${review.projectId} and status = 'active' for update
       `;
       if (!project[0]) throw notFound();
+      await assertProjectMember(sql, review.projectId, { userId: review.userId, tokenId });
       const current = Number(project[0].prompt_revision);
       if (current !== promptRevision) {
         throw conflict(

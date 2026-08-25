@@ -239,15 +239,6 @@ export class PostgresCollaborationRepository implements CollaborationRepository 
     return row?.value ?? null;
   }
 
-  async isUserActive(userId: number): Promise<boolean> {
-    const [row] = await this.db
-      .select({ value: users.isActive })
-      .from(users)
-      .where(eq(users.id, userId))
-      .limit(1);
-    return row?.value ?? false;
-  }
-
   async getProject(projectId: string): Promise<ProjectRecord | null> {
     const [row] = await this.db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
     return row ? projectRecord(row) : null;
@@ -329,8 +320,19 @@ export class PostgresCollaborationRepository implements CollaborationRepository 
     return row?.value ?? 0;
   }
 
-  async assertOwner(projectId: string, userId: number): Promise<void> {
-    await this.lockProject(projectId);
+  async assertMembership(projectId: string, userId: number): Promise<void> {
+    const status = await this.lockProject(projectId);
+    if (status !== "active") throw new HomingError("not_found", "Object not found.", 404);
+    if (!(await this.getMembership(projectId, userId))) {
+      throw new HomingError("not_found", "Object not found.", 404);
+    }
+  }
+
+  async assertOwner(projectId: string, userId: number, allowTrashed = false): Promise<void> {
+    const status = await this.lockProject(projectId);
+    if (!status || (!allowTrashed && status !== "active")) {
+      throw new HomingError("not_found", "Object not found.", 404);
+    }
     if ((await this.getMembership(projectId, userId))?.role !== "owner") {
       throw new HomingError("forbidden", "Owner permission is required.", 403);
     }
@@ -362,8 +364,14 @@ export class PostgresCollaborationRepository implements CollaborationRepository 
       );
   }
 
-  private async lockProject(projectId: string): Promise<void> {
-    await this.db.execute(sql`select id from ${projects} where id = ${projectId} for update`);
+  private async lockProject(projectId: string): Promise<ProjectRecord["status"] | null> {
+    const [project] = await this.db
+      .select({ status: projects.status })
+      .from(projects)
+      .where(eq(projects.id, projectId))
+      .limit(1)
+      .for("update");
+    return project?.status ?? null;
   }
 
   async changeMembershipRole(
@@ -372,7 +380,6 @@ export class PostgresCollaborationRepository implements CollaborationRepository 
     role: Role,
     actorId: number,
   ): Promise<MembershipRecord> {
-    await this.lockProject(projectId);
     await this.assertOwner(projectId, actorId);
     const membership = await this.getMembership(projectId, userId);
     if (!membership) throw new HomingError("not_found", "Object not found.", 404);
@@ -387,7 +394,6 @@ export class PostgresCollaborationRepository implements CollaborationRepository 
   }
 
   async removeMembershipSafely(projectId: string, userId: number, actorId: number): Promise<void> {
-    await this.lockProject(projectId);
     await this.assertOwner(projectId, actorId);
     const membership = await this.getMembership(projectId, userId);
     if (!membership) throw new HomingError("not_found", "Object not found.", 404);
@@ -406,23 +412,37 @@ export class PostgresCollaborationRepository implements CollaborationRepository 
     return invitationRecord(row);
   }
 
-  async getInvitationByTokenDigest(tokenDigest: string): Promise<InvitationRecord | null> {
-    const [row] = await this.db
+  async listPendingInvitations(projectId: string, at: Date): Promise<InvitationRecord[]> {
+    const rows = await this.db
       .select()
       .from(projectInvitations)
-      .where(eq(projectInvitations.tokenDigest, tokenDigest))
-      .limit(1);
-    return row ? invitationRecord(row) : null;
+      .where(
+        and(
+          eq(projectInvitations.projectId, projectId),
+          gt(projectInvitations.expiresAt, at),
+          isNull(projectInvitations.acceptedAt),
+          isNull(projectInvitations.revokedAt),
+        ),
+      )
+      .orderBy(desc(projectInvitations.createdAt));
+    return rows.map(invitationRecord);
   }
 
-  async updateInvitation(id: string, patch: Partial<InvitationRecord>): Promise<InvitationRecord> {
-    const [row] = await this.db
+  async revokeInvitation(projectId: string, invitationId: string, at: Date): Promise<boolean> {
+    const rows = await this.db
       .update(projectInvitations)
-      .set(patch)
-      .where(eq(projectInvitations.id, id))
-      .returning();
-    if (!row) throw new HomingError("not_found", "Object not found.", 404);
-    return invitationRecord(row);
+      .set({ revokedAt: at })
+      .where(
+        and(
+          eq(projectInvitations.id, invitationId),
+          eq(projectInvitations.projectId, projectId),
+          gt(projectInvitations.expiresAt, at),
+          isNull(projectInvitations.acceptedAt),
+          isNull(projectInvitations.revokedAt),
+        ),
+      )
+      .returning({ id: projectInvitations.id });
+    return rows.length === 1;
   }
 
   async getPrompt(projectId: string): Promise<PromptRevisionRecord | null> {
@@ -538,16 +558,47 @@ export class PostgresCollaborationRepository implements CollaborationRepository 
     if (options.after) {
       const cursor = await this.getLead(projectId, options.after);
       if (!cursor) return { items: [], total };
-      if (
-        ["price_asc", "price_desc", "source_asc", "source_desc", "days_asc", "days_desc"].includes(
-          sort,
-        )
-      ) {
-        throw new HomingError(
-          "validation_error",
-          "Cursor pagination is unavailable for this sort.",
-          422,
+      if (sort === "price_asc" || sort === "price_desc") {
+        const ascending = sort === "price_asc";
+        const cursorCondition =
+          cursor.priceAmount === null
+            ? ascending
+              ? and(isNull(leads.priceAmount), gt(leads.id, cursor.id))
+              : and(isNull(leads.priceAmount), lt(leads.id, cursor.id))
+            : or(
+                isNull(leads.priceAmount),
+                ascending
+                  ? gt(leads.priceAmount, String(cursor.priceAmount))
+                  : lt(leads.priceAmount, String(cursor.priceAmount)),
+                and(
+                  eq(leads.priceAmount, String(cursor.priceAmount)),
+                  ascending ? gt(leads.id, cursor.id) : lt(leads.id, cursor.id),
+                ),
+              );
+        if (cursorCondition) conditions.push(cursorCondition);
+      } else if (sort === "source_asc" || sort === "source_desc") {
+        const ascending = sort === "source_asc";
+        const cursorCondition = or(
+          ascending ? gt(leads.source, cursor.source) : lt(leads.source, cursor.source),
+          and(
+            eq(leads.source, cursor.source),
+            ascending ? gt(leads.id, cursor.id) : lt(leads.id, cursor.id),
+          ),
         );
+        if (cursorCondition) conditions.push(cursorCondition);
+      } else if (sort === "days_asc" || sort === "days_desc") {
+        const newestFirst = sort === "days_asc";
+        const cursorCondition =
+          cursor.listedAt === null
+            ? and(isNull(leads.listedAt), gt(leads.id, cursor.id))
+            : or(
+                isNull(leads.listedAt),
+                newestFirst
+                  ? lt(leads.listedAt, cursor.listedAt)
+                  : gt(leads.listedAt, cursor.listedAt),
+                and(eq(leads.listedAt, cursor.listedAt), gt(leads.id, cursor.id)),
+              );
+        if (cursorCondition) conditions.push(cursorCondition);
       } else if (sort === "oldest") {
         const cursorCondition = or(
           gt(leads.createdAt, cursor.createdAt),
@@ -658,12 +709,14 @@ export class PostgresCollaborationRepository implements CollaborationRepository 
           eq(leads.projectId, projectId),
           eq(leads.id, leadId),
           eq(leads.revision, expectedRevision),
+          eq(leads.status, "active"),
         ),
       )
       .returning();
     if (!row) {
       const current = await this.getLead(projectId, leadId);
       if (!current) throw new HomingError("not_found", "Object not found.", 404);
+      if (current.status !== "active") throw new HomingError("not_found", "Object not found.", 404);
       throw new HomingError("stale_write", "The lead changed since it was read.", 409, {
         current_revision: current.revision,
       });
@@ -856,7 +909,7 @@ export class PostgresCollaborationRepository implements CollaborationRepository 
     interested: boolean,
   ): Promise<boolean> {
     const lead = await this.getLead(projectId, leadId);
-    if (!lead) throw new HomingError("not_found", "Object not found.", 404);
+    if (lead?.status !== "active") throw new HomingError("not_found", "Object not found.", 404);
     if (interested) {
       await this.db
         .insert(leadInterests)

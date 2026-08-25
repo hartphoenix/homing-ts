@@ -126,8 +126,18 @@ test("list mode is compact, sortable, searchable, and supports batch actions", a
   });
 
   let interestBody: { interested: boolean } | undefined;
+  let failNextInterest = false;
   await page.route(`**/api/v1/projects/${projectId}/leads/*/interest`, async (route) => {
     interestBody = route.request().postDataJSON() as { interested: boolean };
+    if (failNextInterest) {
+      failNextInterest = false;
+      await route.fulfill({
+        status: 409,
+        contentType: "application/json",
+        body: JSON.stringify({ error: { message: "Interest could not be updated." } }),
+      });
+      return;
+    }
     const leadId = new URL(route.request().url()).pathname.split("/").at(-2);
     const lead = leads.find((item) => item.id === leadId);
     if (lead) {
@@ -163,6 +173,9 @@ test("list mode is compact, sortable, searchable, and supports batch actions", a
   await gardenRow.getByRole("button", { name: /Mark interested/ }).click();
   await expect.poll(() => interestBody).toEqual({ interested: true });
   await expect(gardenRow.getByRole("button", { name: /Remove interest/ })).toHaveText("1 ♥");
+  failNextInterest = true;
+  await parksideRow.getByRole("button", { name: /Remove interest/ }).click();
+  await expect(page.getByText("Interest could not be updated.")).toBeVisible();
 
   const mainBox = await page.locator("main.project-page").boundingBox();
   const tableBox = await page.locator(".lead-table-wrap").boundingBox();
@@ -193,4 +206,96 @@ test("list mode is compact, sortable, searchable, and supports batch actions", a
       lead_ids: ["11111111-1111-4111-8111-111111111101"],
       action: "interested",
     });
+
+  await page.getByLabel("Lead status").selectOption("trash");
+  await expect(page.getByRole("button", { name: /interest/i })).toHaveCount(0);
+});
+
+test("lead pagination consumes next_cursor and resets when the URL filter changes", async ({
+  page,
+}) => {
+  const firstPage = Array.from({ length: 50 }, (_, index) => ({
+    id: `11111111-1111-4111-8111-111111111${String(index + 200).padStart(3, "0")}`,
+    project_id: projectId,
+    source: "Homing",
+    url: `https://example.test/${index}`,
+    title: `First page lead ${index + 1}`,
+    summary: "A paginated listing.",
+    location: "Brooklyn",
+    price_display: "$2,500",
+    listed_at: "2026-08-20",
+    status: "active",
+    revision: 1,
+    interested: false,
+    interest_count: 0,
+    comment_count: 0,
+    updated_at: "2026-08-22T12:00:00Z",
+  }));
+  const secondPage = {
+    ...firstPage[0],
+    id: "11111111-1111-4111-8111-111111111999",
+    title: "Second page lead",
+  };
+  const cursors: string[] = [];
+  await page.route("**/api/v1/me", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        user: { id: 1, email: "hart@example.test" },
+        profile: { display_name: "Hart", timezone: "UTC", bio: "", details: {} },
+      }),
+    });
+  });
+  await page.route("**/api/v1/me/source-plan-reviews**", async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ items: [] }) });
+  });
+  await page.route(`**/api/v1/projects/${projectId}`, async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        id: projectId,
+        name: "Paginated search",
+        slug: "paginated-search",
+        description: "",
+        status: "active",
+        role: "owner",
+        prompt_revision: 1,
+        updated_at: "2026-08-22T12:00:00Z",
+      }),
+    });
+  });
+  await page.route(`**/api/v1/projects/${projectId}/leads?**`, async (route) => {
+    const url = new URL(route.request().url());
+    const query = url.searchParams.get("q") ?? "";
+    const cursor = url.searchParams.get("cursor") ?? "";
+    cursors.push(cursor);
+    const isCountRequest = url.searchParams.get("limit") === "1";
+    if (isCountRequest) {
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({ items: firstPage.slice(0, 1), total: 51 }),
+      });
+      return;
+    }
+    const items = query ? [secondPage] : cursor ? [secondPage] : firstPage;
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        items,
+        total: 51,
+        ...(query || cursor ? {} : { next_cursor: "page-2" }),
+      }),
+    });
+  });
+
+  await page.goto(`/projects/${projectId}?view=list`);
+  await expect(page.getByRole("row")).toHaveCount(51);
+  await page.getByRole("button", { name: "Next page" }).click();
+  await expect(page).toHaveURL(/cursor=page-2/);
+  await expect(page.getByRole("row")).toHaveCount(2);
+  await expect(page.getByText("Second page lead")).toBeVisible();
+  await page.getByRole("textbox", { name: "Search leads" }).fill("second");
+  await expect(page).not.toHaveURL(/cursor=/);
+  await expect(page.getByRole("row")).toHaveCount(2);
+  expect(cursors.at(-1)).toBe("");
 });

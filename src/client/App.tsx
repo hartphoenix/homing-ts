@@ -1,5 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { type FormEvent, type ReactNode, useEffect, useState } from "react";
+import {
+  type FormEvent,
+  type ReactNode,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import {
   Link,
   Navigate,
@@ -17,11 +24,14 @@ import {
   api,
   type Comment,
   clearCsrf,
+  type InvitationDetails,
   type Lead,
   login,
   type Me,
   type Profile,
   type Project,
+  registerInvitation,
+  type SourcePlanReview,
 } from "./api";
 import { detectedTimezone, timezoneLabel, timezoneOptions } from "./timezones";
 
@@ -133,7 +143,14 @@ function listPrice(price: string): string {
 
 function Message({ error }: { error: unknown }) {
   if (!error) return null;
-  const text = error instanceof Error ? error.message : "The request could not be completed.";
+  const text =
+    error instanceof ApiError && error.code === "final_owner"
+      ? "A project must retain at least one owner. Transfer ownership before changing this role."
+      : error instanceof ApiError && error.code === "self_removal"
+        ? "Transfer ownership before removing yourself from this search."
+        : error instanceof Error
+          ? error.message
+          : "The request could not be completed.";
   return (
     <p className="message error" role="alert">
       {text}
@@ -149,7 +166,13 @@ function Loading() {
   );
 }
 
-function LoginPage() {
+function LoginPage({
+  heading = "Sign in",
+  onAuthenticated,
+}: {
+  heading?: string;
+  onAuthenticated?: () => void;
+}) {
   const queryClient = useQueryClient();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -158,6 +181,7 @@ function LoginPage() {
     onSuccess: async () => {
       setPassword("");
       await queryClient.invalidateQueries({ queryKey: ["me"] });
+      onAuthenticated?.();
     },
   });
   const submit = (event: FormEvent) => {
@@ -173,7 +197,7 @@ function LoginPage() {
         <h1>Find the next place together.</h1>
       </section>
       <form className="panel login-form" onSubmit={submit}>
-        <h2>Sign in</h2>
+        <h2>{heading}</h2>
         <label>
           Email
           <input
@@ -200,6 +224,304 @@ function LoginPage() {
         </button>
       </form>
     </main>
+  );
+}
+
+function InvitationPage({ authenticated = false }: { authenticated?: boolean }) {
+  const location = useLocation();
+  const { token: routeToken } = useParams();
+  const token = routeToken || location.pathname.split("/")[2] || "";
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const [email, setEmail] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [password, setPassword] = useState("");
+  const details = useQuery({
+    queryKey: ["invitation", token],
+    queryFn: () => api<InvitationDetails>(`/invitations/${encodeURIComponent(token)}/accept`),
+    enabled: Boolean(token),
+    retry: false,
+  });
+  useEffect(() => {
+    if (details.data) setEmail(details.data.email);
+  }, [details.data]);
+  const accept = useMutation({
+    mutationFn: () =>
+      api<{ project_id: string }>(`/invitations/${encodeURIComponent(token)}/accept`, {
+        method: "POST",
+        mutation: true,
+      }),
+    onSuccess: async ({ project_id }) => {
+      await queryClient.invalidateQueries({ queryKey: ["me"] });
+      navigate(`/projects/${project_id}`);
+    },
+  });
+  const register = useMutation({
+    mutationFn: () => registerInvitation(token, { email, display_name: displayName, password }),
+    onSuccess: async ({ project_id }) => {
+      await queryClient.invalidateQueries({ queryKey: ["me"] });
+      navigate(`/projects/${project_id}`);
+    },
+  });
+
+  if (details.isLoading) return <Loading />;
+  return (
+    <main className="login-page invitation-page">
+      <section className="login-intro">
+        <Link className="wordmark" to="/">
+          Homing
+        </Link>
+        <h1>Join a shared search.</h1>
+      </section>
+      <section className="panel invitation-card">
+        <Message error={details.error} />
+        {details.data && (
+          <>
+            <h2>{details.data.project.name}</h2>
+            <p>
+              {details.data.inviter_name || "A collaborator"} invited{" "}
+              <strong>{details.data.email}</strong> as a {details.data.role}.
+            </p>
+            {authenticated ? (
+              <>
+                <p>Accept this invitation with the signed-in account.</p>
+                <Message error={accept.error} />
+                <button
+                  className="button primary"
+                  disabled={accept.isPending}
+                  onClick={() => accept.mutate()}
+                  type="button"
+                >
+                  {accept.isPending ? "Accepting…" : "Accept invitation"}
+                </button>
+              </>
+            ) : (
+              <>
+                <p>
+                  Already have an account?{" "}
+                  <Link
+                    to={`/login?next=${encodeURIComponent(`${location.pathname}${location.search}`)}`}
+                  >
+                    Sign in to accept this invitation
+                  </Link>
+                  .
+                </p>
+                <form
+                  className="invitation-form"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    register.mutate();
+                  }}
+                >
+                  <label>
+                    Invited email (cannot be changed)
+                    <input
+                      aria-label="Invited email"
+                      autoComplete="email"
+                      readOnly
+                      required
+                      type="email"
+                      value={email}
+                    />
+                  </label>
+                  <p className="quiet small">
+                    This invitation is bound to this email address. Sign in with it to join.
+                  </p>
+                  <label>
+                    Display name
+                    <input
+                      autoComplete="name"
+                      onChange={(event) => setDisplayName(event.target.value)}
+                      required
+                      value={displayName}
+                    />
+                  </label>
+                  <label>
+                    Password
+                    <input
+                      autoComplete="new-password"
+                      minLength={12}
+                      onChange={(event) => setPassword(event.target.value)}
+                      required
+                      type="password"
+                      value={password}
+                    />
+                  </label>
+                  <p className="quiet small">
+                    Use at least 12 characters. This invitation can only be used once.
+                  </p>
+                  <Message error={register.error} />
+                  <button className="button primary" disabled={register.isPending} type="submit">
+                    {register.isPending ? "Creating account…" : "Create account and join"}
+                  </button>
+                </form>
+              </>
+            )}
+          </>
+        )}
+      </section>
+    </main>
+  );
+}
+
+function PairingPage() {
+  const { code: routeCode } = useParams();
+  const [searchParams] = useSearchParams();
+  const code = (routeCode || searchParams.get("code") || "").trim().toUpperCase();
+  const [decision, setDecision] = useState<"approved" | "denied" | null>(null);
+  const request = useQuery({
+    queryKey: ["agent-link", code],
+    queryFn: () =>
+      api<{
+        user_code: string;
+        agent_label: string;
+        environment_note: string;
+        requested_cadence_minutes: number | null;
+        expires_at: string;
+      }>(`/auth/agent-links/${encodeURIComponent(code)}`),
+    enabled: code.length > 0,
+    retry: false,
+  });
+  const decide = useMutation({
+    mutationFn: (action: "approve" | "deny") =>
+      api<{ status: "approved" | "denied" }>(`/auth/agent-links/${encodeURIComponent(code)}`, {
+        method: "POST",
+        mutation: true,
+        body: JSON.stringify({ action }),
+      }),
+    onSuccess: ({ status }) => setDecision(status),
+  });
+  return (
+    <main className="login-page pairing-page">
+      <section className="login-intro">
+        <Link className="wordmark" to="/">
+          Homing
+        </Link>
+        <h1>Connect an agent safely.</h1>
+      </section>
+      <section className="panel pairing-card">
+        {!code && (
+          <Message error={new Error("Enter the six-character pairing code from your agent.")} />
+        )}
+        {request.isLoading && <p className="quiet">Checking pairing request…</p>}
+        <Message error={request.error ?? decide.error} />
+        {request.data && !decision && (
+          <>
+            <h2>Connect {request.data.agent_label}?</h2>
+            <p>
+              {request.data.environment_note ||
+                "This agent is requesting access to your Homing account."}
+            </p>
+            {request.data.requested_cadence_minutes && (
+              <p className="quiet small">
+                Expected check-in: every {request.data.requested_cadence_minutes} minutes.
+              </p>
+            )}
+            <p className="quiet small">Code: {request.data.user_code}</p>
+            <div className="pairing-actions">
+              <button
+                className="button primary"
+                disabled={decide.isPending}
+                onClick={() => decide.mutate("approve")}
+                type="button"
+              >
+                {decide.isPending ? "Saving…" : "Approve agent"}
+              </button>
+              <button
+                className="button"
+                disabled={decide.isPending}
+                onClick={() => decide.mutate("deny")}
+                type="button"
+              >
+                Deny
+              </button>
+            </div>
+          </>
+        )}
+        {decision && (
+          <p className="message" role="status">
+            Pairing {decision}. You can close this page.
+          </p>
+        )}
+      </section>
+    </main>
+  );
+}
+
+function SourcePlanBanner() {
+  const [showRepair, setShowRepair] = useState(false);
+  const reviews = useQuery({
+    queryKey: ["source-plan-reviews"],
+    queryFn: () =>
+      api<{ items: SourcePlanReview[] }>("/me/source-plan-reviews?status=open", {
+        suppressSessionExpired: true,
+      }),
+    retry: false,
+  });
+  const repair = useQuery({
+    queryKey: ["source-plan-repair"],
+    queryFn: () =>
+      api<{ open_review_count: number; prompt: string }>("/me/source-plan-repair", {
+        suppressSessionExpired: true,
+      }),
+    enabled: showRepair,
+    retry: false,
+  });
+  const copyRepair = async () => {
+    if (!repair.data?.prompt) return;
+    try {
+      await navigator.clipboard.writeText(repair.data.prompt);
+    } catch {
+      setShowRepair(true);
+    }
+  };
+  const items = reviews.data?.items ?? [];
+  if (items.length === 0 && !reviews.error) return null;
+  return (
+    <section aria-label="Source plan review" className="source-plan-banner panel">
+      <Message error={reviews.error} />
+      {items.length > 0 && (
+        <>
+          <div>
+            <h2>
+              {items.length} assistant {items.length === 1 ? "needs" : "need"} to review source
+              plans
+            </h2>
+            <p className="quiet">
+              The installed agent should compare its source plan with the current search brief.
+            </p>
+          </div>
+          <div className="source-plan-actions">
+            <button className="button" onClick={() => setShowRepair((open) => !open)} type="button">
+              {showRepair ? "Hide guidance" : "See what it says"}
+            </button>
+          </div>
+          {showRepair && (
+            <div className="source-plan-repair">
+              <Message error={repair.error} />
+              {repair.isLoading && <p className="quiet small">Loading repair guidance…</p>}
+              {repair.data && (
+                <>
+                  <label className="sr-only" htmlFor="source-plan-repair-prompt">
+                    Server-authored repair prompt
+                  </label>
+                  <textarea
+                    id="source-plan-repair-prompt"
+                    aria-label="Server-authored repair prompt"
+                    readOnly
+                    rows={8}
+                    value={repair.data.prompt}
+                  />
+                  <button className="button" onClick={copyRepair} type="button">
+                    Copy repair guidance
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+        </>
+      )}
+    </section>
   );
 }
 
@@ -272,6 +594,7 @@ function Shell({ me, children }: { me: Me; children: ReactNode }) {
                   onClick={() => {
                     const next = new URLSearchParams(searchParams);
                     currentView === "cards" ? next.set("view", "list") : next.delete("view");
+                    next.delete("cursor");
                     setSearchParams(next);
                     setMobileMenuOpen(false);
                   }}
@@ -294,6 +617,7 @@ function Shell({ me, children }: { me: Me; children: ReactNode }) {
           )}
         </div>
       </header>
+      <SourcePlanBanner />
       {children}
     </div>
   );
@@ -430,8 +754,9 @@ function LeadIndex({ projectId }: { projectId: string }) {
   const status = searchParams.get("status") === "trash" ? "trash" : "active";
   const view = searchParams.get("view") === "list" ? "list" : "cards";
   const sort = searchParams.get("sort") ?? "updated";
+  const cursor = searchParams.get("cursor") ?? "";
   const leads = useQuery({
-    queryKey: ["leads", projectId, query, status, searchParams.get("sort")],
+    queryKey: ["leads", projectId, query, status, sort, cursor],
     queryFn: () => {
       const params = new URLSearchParams({
         q: query,
@@ -439,6 +764,7 @@ function LeadIndex({ projectId }: { projectId: string }) {
         sort,
         limit: "50",
       });
+      if (cursor) params.set("cursor", cursor);
       const path =
         status === "trash"
           ? `/projects/${projectId}/trash?${params}`
@@ -481,6 +807,7 @@ function LeadIndex({ projectId }: { projectId: string }) {
     const next = new URLSearchParams(searchParams);
     const current = searchParams.get("sort") ?? "";
     next.set("sort", current === `${column}_asc` ? `${column}_desc` : `${column}_asc`);
+    next.delete("cursor");
     setSearchParams(next);
   };
   const sortDirection = (column: "price" | "source" | "days") =>
@@ -498,6 +825,7 @@ function LeadIndex({ projectId }: { projectId: string }) {
           onChange={(event) => {
             const next = new URLSearchParams(searchParams);
             event.target.value ? next.set("q", event.target.value) : next.delete("q");
+            next.delete("cursor");
             setSelected([]);
             setSearchParams(next, { replace: true });
           }}
@@ -508,6 +836,7 @@ function LeadIndex({ projectId }: { projectId: string }) {
           onChange={(event) => {
             const next = new URLSearchParams(searchParams);
             event.target.value === "trash" ? next.set("status", "trash") : next.delete("status");
+            next.delete("cursor");
             setSelected([]);
             setSearchParams(next);
           }}
@@ -548,6 +877,7 @@ function LeadIndex({ projectId }: { projectId: string }) {
       )}
       <Message error={leads.error} />
       <Message error={batch.error} />
+      <Message error={setInterest.error} />
       {view === "cards" ? (
         <section className="lead-list" aria-label="Lead cards">
           {leads.data?.items.map((lead) => (
@@ -555,7 +885,7 @@ function LeadIndex({ projectId }: { projectId: string }) {
               <Link
                 className="lead-card-hit"
                 aria-label={lead.title}
-                to={`/projects/${projectId}/leads/${lead.id}`}
+                to={`/projects/${projectId}/leads/${lead.id}${status === "trash" ? "?from=trash" : ""}`}
               />
               <div className="lead-card-top">
                 <span className="source">{lead.source}</span>
@@ -592,8 +922,12 @@ function LeadIndex({ projectId }: { projectId: string }) {
           ))}
           {leads.data?.items.length === 0 && (
             <div className="empty">
-              <h2>No leads here</h2>
-              <p>The shared search is ready for its next result.</p>
+              <h2>{status === "trash" ? "Trash is empty" : "No leads here"}</h2>
+              <p>
+                {status === "trash"
+                  ? "Moved listings will appear here until they are restored."
+                  : "The shared search is ready for its next result."}
+              </p>
             </div>
           )}
         </section>
@@ -644,7 +978,9 @@ function LeadIndex({ projectId }: { projectId: string }) {
                     />
                   </td>
                   <td>
-                    <Link to={`/projects/${projectId}/leads/${lead.id}`}>
+                    <Link
+                      to={`/projects/${projectId}/leads/${lead.id}${status === "trash" ? "?from=trash" : ""}`}
+                    >
                       <strong>{lead.title}</strong>
                       <span className="lead-location">{lead.location || "Location unknown"}</span>
                     </Link>
@@ -652,23 +988,29 @@ function LeadIndex({ projectId }: { projectId: string }) {
                   <td>{lead.price_display ? listPrice(lead.price_display) : "Unknown"}</td>
                   <td>{compactDaysOnMarket(lead.listed_at)}</td>
                   <td>
-                    <button
-                      aria-label={`${(lead.interested ?? lead.is_interested) ? "Remove interest from" : "Mark interested in"} ${lead.title}`}
-                      aria-pressed={Boolean(lead.interested ?? lead.is_interested)}
-                      className="interest-toggle"
-                      disabled={setInterest.isPending}
-                      onClick={() =>
-                        setInterest.mutate({
-                          leadId: lead.id,
-                          interested: !(lead.interested ?? lead.is_interested),
-                        })
-                      }
-                      type="button"
-                    >
-                      {lead.interest_count
-                        ? `${lead.interest_count} ${(lead.interested ?? lead.is_interested) ? "♥" : "♡"}`
-                        : "♡"}
-                    </button>
+                    {status === "trash" ? (
+                      <span className="quiet small" title="Interest unavailable in trash">
+                        —
+                      </span>
+                    ) : (
+                      <button
+                        aria-label={`${(lead.interested ?? lead.is_interested) ? "Remove interest from" : "Mark interested in"} ${lead.title}`}
+                        aria-pressed={Boolean(lead.interested ?? lead.is_interested)}
+                        className="interest-toggle"
+                        disabled={setInterest.isPending}
+                        onClick={() =>
+                          setInterest.mutate({
+                            leadId: lead.id,
+                            interested: !(lead.interested ?? lead.is_interested),
+                          })
+                        }
+                        type="button"
+                      >
+                        {lead.interest_count
+                          ? `${lead.interest_count} ${(lead.interested ?? lead.is_interested) ? "♥" : "♡"}`
+                          : "♡"}
+                      </button>
+                    )}
                   </td>
                   <td>{lead.comment_count || ""}</td>
                 </tr>
@@ -677,11 +1019,32 @@ function LeadIndex({ projectId }: { projectId: string }) {
           </table>
           {leads.data?.items.length === 0 && (
             <div className="empty">
-              <h2>No leads here</h2>
-              <p>The shared search is ready for its next result.</p>
+              <h2>{status === "trash" ? "Trash is empty" : "No leads here"}</h2>
+              <p>
+                {status === "trash"
+                  ? "Moved listings will appear here until they are restored."
+                  : "The shared search is ready for its next result."}
+              </p>
             </div>
           )}
         </div>
+      )}
+      {leads.data?.next_cursor && (
+        <nav aria-label="Lead pages" className="lead-pagination">
+          <span className="quiet small">Showing up to {leads.data.items.length} leads</span>
+          <button
+            className="button"
+            onClick={() => {
+              const next = new URLSearchParams(searchParams);
+              next.set("cursor", leads.data?.next_cursor ?? "");
+              setSelected([]);
+              setSearchParams(next);
+            }}
+            type="button"
+          >
+            Next page
+          </button>
+        </nav>
       )}
     </>
   );
@@ -700,10 +1063,17 @@ function ProjectPage({ currentUserId }: { currentUserId: number }) {
     queryFn: () => api<{ total: number }>(`/projects/${projectId}/leads?limit=1`),
   });
   if (project.isLoading) return <Loading />;
+  if (project.error || !project.data) {
+    return (
+      <main className="page project-page">
+        <Message error={project.error ?? new Error("The search could not be loaded.")} />
+      </main>
+    );
+  }
   return (
     <main className="page project-page">
       <header className="page-heading">
-        <h1>{project.data?.name}</h1>
+        <h1>{project.data.name}</h1>
       </header>
       <div className="project-tabs-row">
         <nav className="tabs" aria-label="Project">
@@ -723,6 +1093,7 @@ function ProjectPage({ currentUserId }: { currentUserId: number }) {
                 onClick={() => {
                   const next = new URLSearchParams(searchParams);
                   mode === "list" ? next.set("view", "list") : next.delete("view");
+                  next.delete("cursor");
                   setSearchParams(next);
                 }}
                 type="button"
@@ -761,7 +1132,10 @@ function BriefEditor({ project }: { project: Project }) {
   const queryClient = useQueryClient();
   const [description, setDescription] = useState(project.description);
   const [prompt, setPrompt] = useState(project.prompt ?? project.current_prompt ?? "");
+  const projectId = useRef(project.id);
   useEffect(() => {
+    if (projectId.current === project.id) return;
+    projectId.current = project.id;
     setDescription(project.description);
     setPrompt(project.prompt ?? project.current_prompt ?? "");
   }, [project]);
@@ -772,7 +1146,8 @@ function BriefEditor({ project }: { project: Project }) {
         mutation: true,
         body: JSON.stringify({ description }),
       }),
-    onSuccess: async () => {
+    onSuccess: async (updated) => {
+      setDescription(updated.description);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["project", project.id] }),
         queryClient.invalidateQueries({ queryKey: ["projects"] }),
@@ -781,7 +1156,7 @@ function BriefEditor({ project }: { project: Project }) {
   });
   const mutation = useMutation({
     mutationFn: () =>
-      api(`/projects/${project.id}/prompt`, {
+      api<{ prompt?: string }>(`/projects/${project.id}/prompt`, {
         method: "PATCH",
         mutation: true,
         body: JSON.stringify({
@@ -790,7 +1165,10 @@ function BriefEditor({ project }: { project: Project }) {
           expected_revision: project.prompt_revision,
         }),
       }),
-    onSuccess: async () => queryClient.invalidateQueries({ queryKey: ["project", project.id] }),
+    onSuccess: async (updated) => {
+      if (updated.prompt !== undefined) setPrompt(updated.prompt);
+      await queryClient.invalidateQueries({ queryKey: ["project", project.id] });
+    },
   });
   return (
     <div className="brief-stack">
@@ -806,7 +1184,9 @@ function BriefEditor({ project }: { project: Project }) {
           Description shown on the search card
           <textarea
             maxLength={20000}
-            onChange={(event) => setDescription(event.target.value)}
+            onChange={(event) => {
+              setDescription(event.target.value);
+            }}
             rows={3}
             value={description}
           />
@@ -832,7 +1212,9 @@ function BriefEditor({ project }: { project: Project }) {
             rows={14}
             maxLength={30000}
             value={prompt}
-            onChange={(event) => setPrompt(event.target.value)}
+            onChange={(event) => {
+              setPrompt(event.target.value);
+            }}
           />
         </label>
         <Message error={mutation.error} />
@@ -854,7 +1236,7 @@ type ProjectMember = {
   user_id: number;
   display_name: string;
   email: string;
-  role: string;
+  role: "owner" | "editor" | "viewer";
 };
 
 type PendingInvitation = {
@@ -863,6 +1245,13 @@ type PendingInvitation = {
   role: string;
   status: "pending";
   expires_at: string;
+};
+
+type CreatedInvitation = {
+  id: string;
+  role: string;
+  expires_at: string;
+  invite_url: string;
 };
 
 type MembersData = {
@@ -882,18 +1271,22 @@ function Members({
   const queryClient = useQueryClient();
   const [isInviting, setIsInviting] = useState(false);
   const [email, setEmail] = useState("");
+  const [inviteUrl, setInviteUrl] = useState("");
+  const [inviteCopyStatus, setInviteCopyStatus] = useState("");
   const members = useQuery({
     queryKey: ["members", projectId],
     queryFn: () => api<MembersData>(`/projects/${projectId}/members`),
   });
   const invite = useMutation({
     mutationFn: (invitedEmail: string) =>
-      api<{ id: string; role: string; expires_at: string }>(`/projects/${projectId}/invitations`, {
+      api<CreatedInvitation>(`/projects/${projectId}/invitations`, {
         method: "POST",
         mutation: true,
         body: JSON.stringify({ email: invitedEmail, role: "viewer" }),
       }),
     onSuccess: (invitation, invitedEmail) => {
+      setInviteUrl(new URL(invitation.invite_url, window.location.origin).toString());
+      setInviteCopyStatus("");
       queryClient.setQueryData<MembersData>(["members", projectId], (current) => ({
         items: current?.items ?? [],
         pending_invitations: [
@@ -941,6 +1334,23 @@ function Members({
       }));
     },
   });
+  const changeRole = useMutation({
+    mutationFn: ({ userId, role }: { userId: number; role: ProjectMember["role"] }) =>
+      api<ProjectMember>(`/projects/${projectId}/members/${userId}`, {
+        method: "PATCH",
+        mutation: true,
+        body: JSON.stringify({ role }),
+      }),
+    onSuccess: (updated) => {
+      queryClient.setQueryData<MembersData>(["members", projectId], (current) => ({
+        items:
+          current?.items.map((member) => (member.user_id === updated.user_id ? updated : member)) ??
+          [],
+        pending_invitations: current?.pending_invitations ?? [],
+      }));
+      queryClient.invalidateQueries({ queryKey: ["project", projectId] });
+    },
+  });
 
   const pendingInvitations = members.data?.pending_invitations ?? [];
 
@@ -948,7 +1358,9 @@ function Members({
     <section className="panel">
       <h2>Search party</h2>
       <Message error={members.error} />
-      <Message error={invite.error ?? removeMember.error ?? cancelInvitation.error} />
+      <Message
+        error={invite.error ?? removeMember.error ?? cancelInvitation.error ?? changeRole.error}
+      />
       <div className="member-list">
         {members.data?.items.map((member) => (
           <div className="member-row" key={member.user_id}>
@@ -957,7 +1369,28 @@ function Members({
               <strong>{member.display_name}</strong>
               <p className="quiet small">{member.email}</p>
             </div>
-            <span className="pill">{member.role}</span>
+            {canManage ? (
+              <label>
+                <span className="sr-only">Role for {member.display_name}</span>
+                <select
+                  aria-label={`Role for ${member.display_name}`}
+                  disabled={changeRole.isPending}
+                  onChange={(event) =>
+                    changeRole.mutate({
+                      userId: member.user_id,
+                      role: event.target.value as ProjectMember["role"],
+                    })
+                  }
+                  value={member.role}
+                >
+                  <option value="owner">Owner</option>
+                  <option value="editor">Editor</option>
+                  <option value="viewer">Viewer</option>
+                </select>
+              </label>
+            ) : (
+              <span className="pill">{member.role}</span>
+            )}
             {canManage && member.user_id !== currentUserId && (
               <button
                 className="button member-remove"
@@ -1013,13 +1446,47 @@ function Members({
               value={email}
             />
             <button className="button primary" disabled={invite.isPending} type="submit">
-              {invite.isPending ? "Sending…" : "Send"}
+              {invite.isPending ? "Creating link…" : "Create invite link"}
             </button>
           </form>
         )}
       </div>
+      {inviteUrl && (
+        <div className="one-time-key invitation-link" role="status">
+          <strong>Copy this one-time invitation link now.</strong>
+          <label>
+            Invitation link
+            <input aria-label="Invitation link" readOnly value={inviteUrl} />
+          </label>
+          <button
+            className="button"
+            onClick={async () => {
+              try {
+                await navigator.clipboard.writeText(inviteUrl);
+                setInviteCopyStatus("Invitation link copied.");
+              } catch {
+                setInviteCopyStatus("Copy failed. Select the link manually.");
+              }
+            }}
+            type="button"
+          >
+            Copy invitation link
+          </button>
+          <span className="copy-status" role="status">
+            {inviteCopyStatus}
+          </span>
+        </div>
+      )}
       {!isInviting && (
-        <button className="button invite-trigger" onClick={() => setIsInviting(true)} type="button">
+        <button
+          className="button invite-trigger"
+          onClick={() => {
+            setInviteUrl("");
+            setInviteCopyStatus("");
+            setIsInviting(true);
+          }}
+          type="button"
+        >
           Invite
         </button>
       )}
@@ -1031,20 +1498,23 @@ function LeadPage() {
   const { projectId = "", leadId = "" } = useParams();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const [leadSearchParams] = useSearchParams();
   const [comment, setComment] = useState("");
   const [isEditing, setIsEditing] = useState(false);
   const [draftTitle, setDraftTitle] = useState("");
   const [draftPrice, setDraftPrice] = useState("");
   const [draftListedAt, setDraftListedAt] = useState("");
   const [draftSummary, setDraftSummary] = useState("");
+  const leadQueryKey = ["lead", projectId, leadId, leadSearchParams.get("from")] as const;
   const project = useQuery({
     queryKey: ["project", projectId],
     queryFn: () => api<Project>(`/projects/${projectId}`),
   });
   const lead = useQuery({
-    queryKey: ["lead", projectId, leadId],
+    queryKey: leadQueryKey,
     queryFn: () => api<Lead>(`/projects/${projectId}/leads/${leadId}`),
   });
+  const leadIsTrashed = lead.data?.status === "trashed" || leadSearchParams.get("from") === "trash";
   useEffect(() => {
     if (!lead.data || isEditing) return;
     setDraftTitle(lead.data.title);
@@ -1055,6 +1525,7 @@ function LeadPage() {
   const comments = useQuery({
     queryKey: ["comments", projectId, leadId],
     queryFn: () => api<{ items: Comment[] }>(`/projects/${projectId}/leads/${leadId}/comments`),
+    enabled: Boolean(lead.data && !leadIsTrashed),
   });
   const addComment = useMutation({
     mutationFn: () =>
@@ -1085,7 +1556,7 @@ function LeadPage() {
       });
     },
     onSuccess: async (updatedLead) => {
-      queryClient.setQueryData(["lead", projectId, leadId], updatedLead);
+      queryClient.setQueryData(leadQueryKey, updatedLead);
       setIsEditing(false);
       await queryClient.invalidateQueries({ queryKey: ["leads", projectId] });
     },
@@ -1121,11 +1592,34 @@ function LeadPage() {
       navigate(`/projects/${projectId}`);
     },
   });
+  const restoreLead = useMutation({
+    mutationFn: () => {
+      if (!lead.data) throw new Error("The lead is not loaded.");
+      return api<Lead>(`/projects/${projectId}/trash/${leadId}/restore`, {
+        method: "POST",
+        mutation: true,
+        headers: { "If-Match": `"${lead.data.revision}"` },
+      });
+    },
+    onSuccess: async (updatedLead) => {
+      queryClient.setQueryData(leadQueryKey, updatedLead);
+      queryClient.setQueryData(["lead", projectId, leadId], updatedLead);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["lead", projectId, leadId] }),
+        queryClient.invalidateQueries({ queryKey: ["leads", projectId] }),
+        queryClient.invalidateQueries({ queryKey: ["lead-count", projectId] }),
+        queryClient.invalidateQueries({ queryKey: ["dashboard-lead-count", projectId] }),
+        queryClient.invalidateQueries({ queryKey: ["comments", projectId, leadId] }),
+      ]);
+      navigate(`/projects/${projectId}/leads/${leadId}`, { replace: true });
+    },
+  });
   return (
     <main className="page detail-page">
       <Link className="back" to={`/projects/${projectId}`}>
         ← All {project.data?.name ? `${project.data.name} ` : ""}leads
       </Link>
+      <Message error={project.error} />
       <Message error={lead.error} />
       {lead.data && (
         <>
@@ -1190,7 +1684,11 @@ function LeadPage() {
               ) : (
                 <p>{lead.data.summary || "No summary yet."}</p>
               )}
-              <Message error={updateLead.error ?? setInterest.error ?? trashLead.error} />
+              <Message
+                error={
+                  updateLead.error ?? setInterest.error ?? trashLead.error ?? restoreLead.error
+                }
+              />
               {isEditing ? (
                 <div className="lead-edit-actions">
                   <button className="button" onClick={() => setIsEditing(false)} type="button">
@@ -1207,38 +1705,42 @@ function LeadPage() {
                 </div>
               ) : (
                 <div className="lead-detail-actions">
+                  {!leadIsTrashed && (
+                    <button
+                      aria-label={lead.data.interested ? "Remove interest" : "Mark interested"}
+                      className={`icon-button interest-button${lead.data.interested ? " active" : ""}`}
+                      disabled={setInterest.isPending}
+                      onClick={() => setInterest.mutate(!lead.data?.interested)}
+                      title={lead.data.interested ? "Remove interest" : "Mark interested"}
+                      type="button"
+                    >
+                      <span aria-hidden="true">{lead.data.interested ? "♥" : "♡"}</span>
+                    </button>
+                  )}
                   <button
-                    aria-label={lead.data.interested ? "Remove interest" : "Mark interested"}
-                    className={`icon-button interest-button${lead.data.interested ? " active" : ""}`}
-                    disabled={setInterest.isPending}
-                    onClick={() => setInterest.mutate(!lead.data?.interested)}
-                    title={lead.data.interested ? "Remove interest" : "Mark interested"}
-                    type="button"
-                  >
-                    <span aria-hidden="true">{lead.data.interested ? "♥" : "♡"}</span>
-                  </button>
-                  <button
-                    aria-label="Move to trash"
+                    aria-label={leadIsTrashed ? "Restore" : "Move to trash"}
                     className="icon-button"
-                    disabled={trashLead.isPending}
-                    onClick={() => trashLead.mutate()}
-                    title="Move to trash"
+                    disabled={trashLead.isPending || restoreLead.isPending}
+                    onClick={() => (leadIsTrashed ? restoreLead.mutate() : trashLead.mutate())}
+                    title={leadIsTrashed ? "Restore" : "Move to trash"}
                     type="button"
                   >
                     <span aria-hidden="true">×</span>
                   </button>
-                  <button
-                    aria-label="Edit lead"
-                    className="icon-button"
-                    onClick={() => setIsEditing(true)}
-                    title="Edit lead"
-                    type="button"
-                  >
-                    <svg aria-hidden="true" viewBox="0 0 24 24">
-                      <path d="m19 5-3-3L4 14l-1 5 5-1L20 6l-1-1Z" />
-                      <path d="m14 4 4 4" />
-                    </svg>
-                  </button>
+                  {!leadIsTrashed && (
+                    <button
+                      aria-label="Edit lead"
+                      className="icon-button"
+                      onClick={() => setIsEditing(true)}
+                      title="Edit lead"
+                      type="button"
+                    >
+                      <svg aria-hidden="true" viewBox="0 0 24 24">
+                        <path d="m19 5-3-3L4 14l-1 5 5-1L20 6l-1-1Z" />
+                        <path d="m14 4 4 4" />
+                      </svg>
+                    </button>
+                  )}
                 </div>
               )}
             </article>
@@ -1249,40 +1751,49 @@ function LeadPage() {
             )}
             <aside className="panel">
               <h2>Conversation</h2>
-              <div className="comments">
-                {comments.data?.items.map((item) => (
-                  <div key={item.id}>
-                    <span className="avatar">{String(item.author_id).slice(0, 1)}</span>
-                    <p>
-                      {item.body}
-                      <small>{new Date(item.created_at).toLocaleString()}</small>
-                    </p>
+              {!leadIsTrashed && (
+                <>
+                  <Message error={comments.error} />
+                  <div className="comments">
+                    {comments.data?.items.map((item) => (
+                      <div key={item.id}>
+                        <span className="avatar">{String(item.author_id).slice(0, 1)}</span>
+                        <p>
+                          {item.body}
+                          <small>{new Date(item.created_at).toLocaleString()}</small>
+                        </p>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
-              <form
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  addComment.mutate();
-                }}
-              >
-                <label className="sr-only" htmlFor="comment">
-                  Add a comment
-                </label>
-                <textarea
-                  id="comment"
-                  rows={3}
-                  value={comment}
-                  onChange={(event) => setComment(event.target.value)}
-                  maxLength={10000}
-                  required
-                  placeholder="Add a note for everyone…"
-                />
-                <Message error={addComment.error} />
-                <button className="button" disabled={addComment.isPending} type="submit">
-                  Add comment
-                </button>
-              </form>
+                </>
+              )}
+              {leadIsTrashed ? (
+                <p className="quiet small">Comments are unavailable while this lead is in trash.</p>
+              ) : (
+                <form
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    addComment.mutate();
+                  }}
+                >
+                  <label className="sr-only" htmlFor="comment">
+                    Add a comment
+                  </label>
+                  <textarea
+                    id="comment"
+                    rows={3}
+                    value={comment}
+                    onChange={(event) => setComment(event.target.value)}
+                    maxLength={10000}
+                    required
+                    placeholder="Add a note for everyone…"
+                  />
+                  <Message error={addComment.error} />
+                  <button className="button" disabled={addComment.isPending} type="submit">
+                    Add comment
+                  </button>
+                </form>
+              )}
             </aside>
           </div>
         </>
@@ -1304,9 +1815,14 @@ function Placeholder({ title, children }: { title: string; children: ReactNode }
 
 function AgentSetupPage() {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const [isPromptOpen, setIsPromptOpen] = useState(false);
   const [previewActiveKey, setPreviewActiveKey] = useState(false);
   const [copyStatus, setCopyStatus] = useState("");
+  const [keyName, setKeyName] = useState("");
+  const [pairCode, setPairCode] = useState("");
+  const [newAccessKey, setNewAccessKey] = useState("");
+  const [newAccessKeyId, setNewAccessKeyId] = useState("");
   const tokens = useQuery({
     queryKey: ["agent-tokens"],
     queryFn: () => api<{ items: AgentTokenSummary[] }>("/auth/tokens"),
@@ -1331,10 +1847,49 @@ function AgentSetupPage() {
   const showSetupPrompt =
     !previewActiveKey && (tokens.isError || (tokens.isSuccess && activeTokens.length === 0));
   const setupPrompt = buildAgentSetupPrompt(window.location.origin);
+  const manualAgentScopes = [
+    "profile:read",
+    "projects:read",
+    "prompts:read",
+    "leads:read",
+    "leads:write",
+    "comments:read",
+    "comments:write",
+    "interest:read",
+    "interest:write",
+    "runs:write",
+  ];
   const disconnectToken = useMutation({
     mutationFn: (tokenId: string) =>
       api<void>(`/auth/tokens/${tokenId}`, { method: "DELETE", mutation: true }),
-    onSuccess: async () => {
+    onSuccess: async (_, tokenId) => {
+      if (tokenId === newAccessKeyId) {
+        setNewAccessKey("");
+        setNewAccessKeyId("");
+      }
+      await queryClient.invalidateQueries({ queryKey: ["agent-tokens"] });
+    },
+  });
+  const createToken = useMutation({
+    mutationFn: () =>
+      api<{
+        id: string;
+        token: string;
+        scopes: string[];
+        project_ids: string[];
+        expires_at: string;
+      }>("/auth/tokens", {
+        method: "POST",
+        mutation: true,
+        body: JSON.stringify({
+          name: keyName.trim(),
+          scopes: manualAgentScopes,
+        }),
+      }),
+    onSuccess: async (created) => {
+      setKeyName("");
+      setNewAccessKey(created.token);
+      setNewAccessKeyId(created.id);
       await queryClient.invalidateQueries({ queryKey: ["agent-tokens"] });
     },
   });
@@ -1393,6 +1948,91 @@ function AgentSetupPage() {
 
   return (
     <Placeholder title="Agent setup">
+      <section className="agent-pairing-entry">
+        <h2>Pair an existing agent</h2>
+        <p className="quiet">
+          Enter the six-character code shown by an agent that is waiting for approval.
+        </p>
+        <form
+          className="pairing-code-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            navigate(`/link/?code=${encodeURIComponent(pairCode.trim().toUpperCase())}`);
+          }}
+        >
+          <label>
+            Pairing code
+            <input
+              autoCapitalize="characters"
+              autoComplete="one-time-code"
+              inputMode="text"
+              maxLength={6}
+              onChange={(event) => setPairCode(event.target.value.replace(/[^a-z0-9]/gi, ""))}
+              required
+              spellCheck={false}
+              value={pairCode}
+            />
+          </label>
+          <button className="button" disabled={pairCode.trim().length < 6} type="submit">
+            Review request
+          </button>
+        </form>
+      </section>
+      <section className="manual-token-form">
+        <h2>Create a manual access key</h2>
+        <p className="quiet">
+          Use this only when pairing is unavailable. The full key is shown once.
+        </p>
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            createToken.mutate();
+          }}
+        >
+          <label>
+            Key name
+            <input
+              autoComplete="off"
+              maxLength={120}
+              onChange={(event) => setKeyName(event.target.value)}
+              required
+              value={keyName}
+            />
+          </label>
+          <Message error={createToken.error} />
+          <button
+            className="button"
+            disabled={createToken.isPending || !keyName.trim()}
+            type="submit"
+          >
+            {createToken.isPending ? "Creating…" : "Create access key"}
+          </button>
+        </form>
+        {newAccessKey && (
+          <div className="one-time-key" role="status">
+            <strong>Copy this key now. It will not be shown again.</strong>
+            <label>
+              New access key
+              <input aria-label="New access key" readOnly value={newAccessKey} />
+            </label>
+            <button
+              className="button"
+              onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(newAccessKey);
+                  setCopyStatus("Access key copied.");
+                } catch {
+                  setCopyStatus("Copy failed. Select the key manually.");
+                }
+              }}
+              type="button"
+            >
+              Copy access key
+            </button>
+            <span className="copy-status">{copyStatus}</span>
+          </div>
+        )}
+      </section>
       {import.meta.env.DEV && (
         <label className="dev-preview-toggle">
           <input
@@ -1497,6 +2137,21 @@ function ProfileSettingsForm({ profile }: { profile: Profile }) {
   );
   const [bio, setBio] = useState(profile.bio);
   const [saveStatus, setSaveStatus] = useState("");
+  const paused = Boolean(
+    profile.agent_paused_until && Date.parse(profile.agent_paused_until) > Date.now(),
+  );
+  const updateCachedProfile = (updatedProfile: Profile) => {
+    queryClient.setQueryData(["profile"], updatedProfile);
+    queryClient.setQueryData<Me>(["me"], (current) =>
+      current
+        ? {
+            ...current,
+            user: { ...current.user, display_name: updatedProfile.display_name },
+            profile: updatedProfile,
+          }
+        : current,
+    );
+  };
   const saveProfile = useMutation({
     mutationFn: (patch: ProfilePatch) =>
       api<Profile>("/me/profile", {
@@ -1505,17 +2160,22 @@ function ProfileSettingsForm({ profile }: { profile: Profile }) {
         body: JSON.stringify(patch),
       }),
     onSuccess: (updatedProfile) => {
-      queryClient.setQueryData(["profile"], updatedProfile);
-      queryClient.setQueryData<Me>(["me"], (current) =>
-        current
-          ? {
-              ...current,
-              user: { ...current.user, display_name: updatedProfile.display_name },
-              profile: updatedProfile,
-            }
-          : current,
-      );
+      updateCachedProfile(updatedProfile);
       setSaveStatus("Profile saved.");
+    },
+  });
+  const setPause = useMutation({
+    mutationFn: (until: string | null) =>
+      api<Profile>("/me/profile", {
+        method: "PATCH",
+        mutation: true,
+        body: JSON.stringify({ agent_paused_until: until }),
+      }),
+    onSuccess: (updatedProfile) => {
+      updateCachedProfile(updatedProfile);
+      setSaveStatus(
+        updatedProfile.agent_paused_until ? "Agent activity paused." : "Agent activity resumed.",
+      );
     },
   });
 
@@ -1531,6 +2191,43 @@ function ProfileSettingsForm({ profile }: { profile: Profile }) {
 
   return (
     <section aria-label="Profile" className="panel">
+      <div className="pause-controls">
+        <div>
+          <h2>{paused ? "Search is paused" : "Agent activity"}</h2>
+          <p className="quiet">
+            {paused
+              ? "Scheduled agents will remain paused until the time shown below."
+              : "Pause scheduled agent activity if you need a quiet period."}
+          </p>
+          {paused && (
+            <p className="quiet small">
+              Paused until <TokenDate value={profile.agent_paused_until} empty="later" />.
+            </p>
+          )}
+        </div>
+        {paused ? (
+          <button
+            className="button"
+            disabled={setPause.isPending}
+            onClick={() => setPause.mutate(null)}
+            type="button"
+          >
+            {setPause.isPending ? "Resuming…" : "Resume agents"}
+          </button>
+        ) : (
+          <button
+            className="button"
+            disabled={setPause.isPending}
+            onClick={() =>
+              setPause.mutate(new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString())
+            }
+            type="button"
+          >
+            {setPause.isPending ? "Pausing…" : "Pause for 24 hours"}
+          </button>
+        )}
+        <Message error={setPause.error} />
+      </div>
       <form className="settings-form" onSubmit={submit}>
         <div className="profile-fields">
           <label>
@@ -1723,6 +2420,8 @@ function AuthenticatedApp({ me }: { me: Me }) {
     <Shell me={me}>
       <Routes>
         <Route path="/" element={<Dashboard />} />
+        <Route path="/invitations/:token/*" element={<InvitationPage authenticated />} />
+        <Route path="/link/*" element={<PairingPage />} />
         <Route path="/projects/:projectId/leads/:leadId" element={<LeadPage />} />
         <Route path="/projects/:projectId/*" element={<ProjectPage currentUserId={me.user.id} />} />
         <Route path="/agent-setup" element={<AgentSetupPage />} />
@@ -1734,13 +2433,76 @@ function AuthenticatedApp({ me }: { me: Me }) {
 }
 
 export function App() {
-  const me = useQuery({ queryKey: ["me"], queryFn: () => api<Me>("/me"), retry: false });
+  const location = useLocation();
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const [sessionExpired, setSessionExpired] = useState(false);
+  const [privateCacheUserId, setPrivateCacheUserId] = useState<number | null>(null);
+  const previousUserId = useRef<number | null>(null);
+  const me = useQuery({
+    queryKey: ["me"],
+    queryFn: () => api<Me>("/me"),
+    retry: false,
+    staleTime: 0,
+  });
+  const currentUserId = me.data?.user.id ?? null;
+  const privateCacheReady = currentUserId !== null && privateCacheUserId === currentUserId;
+  useLayoutEffect(() => {
+    if (currentUserId === null) return;
+    if (previousUserId.current !== null && previousUserId.current !== currentUserId) {
+      queryClient.removeQueries({
+        predicate: (query) => query.queryKey[0] !== "me",
+      });
+    }
+    previousUserId.current = currentUserId;
+    setPrivateCacheUserId(currentUserId);
+  }, [currentUserId, queryClient]);
+  useEffect(() => {
+    const onExpired = () => {
+      if (me.data) setSessionExpired(true);
+    };
+    window.addEventListener("homing:session-expired", onExpired);
+    return () => window.removeEventListener("homing:session-expired", onExpired);
+  }, [me.data]);
+  const completeLogin = () => {
+    const next = new URLSearchParams(location.search).get("next");
+    if (location.pathname === "/login") {
+      navigate(next?.startsWith("/") && !next.startsWith("//") ? next : "/", {
+        replace: true,
+      });
+    }
+    setSessionExpired(false);
+  };
   let content: ReactNode;
   let defaultBackground: BackgroundId = "interior-brownstone";
 
-  if (me.isLoading) content = <Loading />;
+  if (sessionExpired && me.data && privateCacheReady) {
+    content = (
+      <div className="app-frame">
+        <div aria-hidden="true" className="app-suspended" inert>
+          <AuthenticatedApp key={me.data.user.id} me={me.data} />
+        </div>
+        <div aria-label="Sign in again" aria-modal="true" className="reauth-overlay" role="dialog">
+          <LoginPage heading="Sign in again" onAuthenticated={completeLogin} />
+        </div>
+      </div>
+    );
+    defaultBackground = "exterior-leafy-block";
+  } else if (sessionExpired) {
+    content = <LoginPage heading="Sign in again" onAuthenticated={completeLogin} />;
+    defaultBackground = "exterior-leafy-block";
+  } else if (me.isLoading) content = <Loading />;
   else if (me.error instanceof ApiError && me.error.status === 401) {
-    content = <LoginPage />;
+    const invitationPath = /^\/invitations\/[^/]+(?:\/accept)?\/?$/.test(location.pathname);
+    const pairingPath = /^\/link\/?$/.test(location.pathname);
+    content = invitationPath ? (
+      <InvitationPage />
+    ) : (
+      <LoginPage
+        heading={pairingPath ? "Sign in to approve" : "Sign in"}
+        onAuthenticated={completeLogin}
+      />
+    );
     defaultBackground = "exterior-leafy-block";
   } else if (me.error) {
     content = (
@@ -1754,7 +2516,21 @@ export function App() {
         </div>
       </main>
     );
-  } else content = me.data ? <AuthenticatedApp me={me.data} /> : <Loading />;
+  } else if (me.data && location.pathname === "/login") {
+    content = <LoginPage onAuthenticated={completeLogin} />;
+    defaultBackground = "exterior-leafy-block";
+  } else if (me.data && privateCacheReady) {
+    content = (
+      <div className="app-frame">
+        <div className="app-authenticated">
+          <AuthenticatedApp key={me.data.user.id} me={me.data} />
+        </div>
+      </div>
+    );
+  } else if (location.pathname === "/login") {
+    content = <LoginPage onAuthenticated={completeLogin} />;
+    defaultBackground = "exterior-leafy-block";
+  } else content = <Loading />;
 
   return (
     <>

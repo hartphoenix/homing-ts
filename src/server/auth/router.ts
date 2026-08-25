@@ -19,7 +19,7 @@ import {
   SESSION_COOKIE,
   SESSION_DAYS,
 } from "./crypto";
-import { hashPassword, verifyPassword } from "./password";
+import { hashPassword, verifyPasswordOrDummy } from "./password";
 import type { AuthRepository } from "./repository";
 import { AGENT_SCOPES, normalizeScopes, PAIRED_AGENT_SCOPES } from "./scopes";
 import type {
@@ -50,6 +50,8 @@ export type AuthRouterDependencies = {
   now?: () => Date;
 };
 
+const BOOTSTRAP_SESSION_SECONDS = 15 * 60;
+
 class AuthHttpError extends HomingError {
   readonly headers: Record<string, string>;
 
@@ -73,6 +75,42 @@ function nowOf(deps: AuthRouterDependencies): Date {
 function throttleDigest(deps: AuthRouterDependencies, kind: string, value: string): string {
   const key = deps.throttleKey ?? "homing-auth-throttle-key-not-for-production";
   return createHmac("sha256", key).update(`auth-throttle:${kind}:${value}`, "utf8").digest("hex");
+}
+
+function authHmac(deps: AuthRouterDependencies, purpose: string, value: string): string {
+  const key = deps.throttleKey ?? "homing-auth-throttle-key-not-for-production";
+  return createHmac("sha256", key).update(`${purpose}:${value}`, "utf8").digest("hex");
+}
+
+function newBootstrapSession(deps: AuthRouterDependencies, now: Date): string {
+  const value = `b.${Math.floor(now.getTime() / 1000)}.${randomOpaque()}`;
+  return `${value}.${authHmac(deps, "csrf-bootstrap-session", value)}`;
+}
+
+function bootstrapCsrf(deps: AuthRouterDependencies, raw: string): string {
+  return authHmac(deps, "csrf-bootstrap-token", raw);
+}
+
+function validBootstrapSession(deps: AuthRouterDependencies, raw: string, now: Date): boolean {
+  const [version, secondsText, nonce, signature, ...extra] = raw.split(".");
+  if (
+    extra.length ||
+    version !== "b" ||
+    !/^[0-9]{10,}$/.test(secondsText ?? "") ||
+    !/^[A-Za-z0-9_-]{40,}$/.test(nonce ?? "") ||
+    !/^[0-9a-f]{64}$/.test(signature ?? "")
+  ) {
+    return false;
+  }
+  const seconds = Number(secondsText);
+  const age = Math.floor(now.getTime() / 1000) - seconds;
+  const value = `${version}.${secondsText}.${nonce}`;
+  return (
+    Number.isSafeInteger(seconds) &&
+    age >= -60 &&
+    age <= BOOTSTRAP_SESSION_SECONDS &&
+    equalOpaque(signature as string, authHmac(deps, "csrf-bootstrap-session", value))
+  );
 }
 
 function clientAddress(context: AuthContext, deps: AuthRouterDependencies): string {
@@ -255,6 +293,8 @@ function tokenMetadata(token: AgentTokenRecord) {
     prefix: token.tokenPrefix,
     scopes: token.scopes,
     project_ids: token.projectIds,
+    created_at: token.createdAt.toISOString(),
+    last_used_at: iso(token.lastUsedAt),
     expires_at: token.expiresAt.toISOString(),
     revoked_at: iso(token.revokedAt),
   };
@@ -263,6 +303,7 @@ function tokenMetadata(token: AgentTokenRecord) {
 async function sessionFromCookie(context: AuthContext, deps: AuthRouterDependencies) {
   const raw = getCookie(context, SESSION_COOKIE);
   if (!raw || raw.length > 256) return null;
+  if (raw.includes(".")) return null;
   const session = await deps.repo.getSession(digestOpaque(raw));
   if (!session || session.expiresAt <= nowOf(deps)) return null;
   return { raw, session };
@@ -311,11 +352,19 @@ export async function assertSessionMutation(
 ): Promise<void> {
   requireExactOrigin(context, deps);
   const cookieSession = await sessionFromCookie(context, deps);
+  const raw = getCookie(context, SESSION_COOKIE);
   const provided = context.req.header("X-CSRF-Token");
-  if (!cookieSession || !provided || provided.length > 256 || !provided.trim()) {
+  if (!provided || provided.length > 256 || !provided.trim()) {
     throw new HomingError("csrf_failed", "A valid CSRF token is required.", 403);
   }
-  if (!equalOpaque(digestOpaque(provided), cookieSession.session.csrfDigest)) {
+  const validPersisted =
+    cookieSession && equalOpaque(digestOpaque(provided), cookieSession.session.csrfDigest);
+  const validBootstrap =
+    raw &&
+    raw.length <= 256 &&
+    validBootstrapSession(deps, raw, nowOf(deps)) &&
+    equalOpaque(provided, bootstrapCsrf(deps, raw));
+  if (!validPersisted && !validBootstrap) {
     throw new HomingError("csrf_failed", "A valid CSRF token is required.", 403);
   }
 }
@@ -480,16 +529,9 @@ export function createAuthRouter(deps: AuthRouterDependencies) {
           return context.json({ csrf_token: csrf });
         }
       }
-      const rawSession = randomOpaque();
-      const input: CreateSessionInput = {
-        digest: digestOpaque(rawSession),
-        userId: null,
-        csrfDigest,
-        expiresAt: new Date(now.getTime() + (deps.sessionDays ?? SESSION_DAYS) * 86_400_000),
-      };
-      await deps.repo.createSession(input);
-      setSessionCookie(context, rawSession, (deps.sessionDays ?? SESSION_DAYS) * 86_400);
-      return context.json({ csrf_token: csrf });
+      const rawSession = newBootstrapSession(deps, now);
+      setSessionCookie(context, rawSession, BOOTSTRAP_SESSION_SECONDS);
+      return context.json({ csrf_token: bootstrapCsrf(deps, rawSession) });
     }),
   );
 
@@ -513,7 +555,8 @@ export function createAuthRouter(deps: AuthRouterDependencies) {
         ["ip", address],
         ["email", email],
       ];
-      await consumeThrottle(deps, throttleKeys, 5, 15 * 60_000);
+      await consumeThrottle(deps, [["ip", address]], 5, 15 * 60_000);
+      await consumeThrottle(deps, [["email", email]], 5, 15 * 60_000);
       const displayName = String(body.display_name ?? "").trim();
       const password = String(body.password ?? "");
       if (
@@ -546,11 +589,10 @@ export function createAuthRouter(deps: AuthRouterDependencies) {
       }
       const { user } = registration;
       const oldSession = await sessionFromCookie(context, deps);
-      if (!oldSession) throw new HomingError("csrf_failed", "A valid CSRF token is required.", 403);
       const rawSession = randomOpaque();
       const rawCsrf = randomOpaque();
       await deps.repo.completeLogin(
-        digestOpaque(oldSession.raw),
+        oldSession ? digestOpaque(oldSession.raw) : null,
         {
           digest: digestOpaque(rawSession),
           userId: user.id,
@@ -630,17 +672,19 @@ export function createAuthRouter(deps: AuthRouterDependencies) {
         ["ip", address],
         ["email", email],
       ];
-      await consumeThrottle(deps, throttleKeys, 5, 15 * 60_000);
+      await consumeThrottle(deps, [["ip", address]], 5, 15 * 60_000);
+      await consumeThrottle(deps, [["email", email]], 5, 15 * 60_000);
       const password = String(body.password ?? "");
       if (!password || password.length > 4096) {
         throw new HomingError("unauthorized", "Invalid credentials.", 401);
       }
       const oldSession = await sessionFromCookie(context, deps);
       const user = await deps.repo.findUserByEmail(email);
-      const check =
-        user?.isActive && !user.passwordResetRequired
-          ? await verifyPassword(password, user.passwordHash)
-          : { valid: false };
+      const eligible = Boolean(user?.isActive && !user.passwordResetRequired);
+      const check = await verifyPasswordOrDummy(
+        password,
+        eligible ? (user?.passwordHash ?? null) : null,
+      );
       if (!user?.isActive || user.passwordResetRequired || !check.valid) {
         throw new HomingError("unauthorized", "Invalid credentials.", 401);
       }
@@ -654,8 +698,12 @@ export function createAuthRouter(deps: AuthRouterDependencies) {
         csrfDigest: digestOpaque(rawCsrf),
         expiresAt: new Date(now.getTime() + (deps.sessionDays ?? SESSION_DAYS) * 86_400_000),
       };
-      if (!oldSession) throw new HomingError("csrf_failed", "A valid CSRF token is required.", 403);
-      await deps.repo.completeLogin(digestOpaque(oldSession.raw), input, user.id, check.rehash);
+      await deps.repo.completeLogin(
+        oldSession ? digestOpaque(oldSession.raw) : null,
+        input,
+        user.id,
+        check.rehash,
+      );
       setSessionCookie(context, rawSession, (deps.sessionDays ?? SESSION_DAYS) * 86_400);
       return context.json({ user: { id: user.id, email: user.email }, csrf_token: rawCsrf });
     }),

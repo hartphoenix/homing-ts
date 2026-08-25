@@ -25,6 +25,12 @@ export class ApiError extends Error {
 
 let csrfToken = "";
 
+function notifySessionExpired(): void {
+  if (typeof window === "undefined") return;
+  clearCsrf();
+  window.dispatchEvent(new CustomEvent("homing:session-expired"));
+}
+
 async function readBody(response: Response): Promise<unknown> {
   if (response.status === 204) return undefined;
   const text = await response.text();
@@ -42,7 +48,10 @@ export async function acquireCsrf(): Promise<string> {
     headers: { Accept: "application/json" },
   });
   const body = (await readBody(response)) as { csrf_token?: string } & ApiErrorBody;
-  if (!response.ok) throw new ApiError(response.status, body);
+  if (!response.ok) {
+    if (response.status === 401) notifySessionExpired();
+    throw new ApiError(response.status, body);
+  }
   if (!body.csrf_token) throw new Error("The server did not return a CSRF token.");
   csrfToken = body.csrf_token;
   return csrfToken;
@@ -50,7 +59,7 @@ export async function acquireCsrf(): Promise<string> {
 
 export async function api<T>(
   path: string,
-  init: RequestInit & { mutation?: boolean } = {},
+  init: RequestInit & { mutation?: boolean; suppressSessionExpired?: boolean } = {},
 ): Promise<T> {
   const result = await apiResponse<T>(path, init);
   return result.data;
@@ -58,9 +67,9 @@ export async function api<T>(
 
 export async function apiResponse<T>(
   path: string,
-  init: RequestInit & { mutation?: boolean } = {},
+  init: RequestInit & { mutation?: boolean; suppressSessionExpired?: boolean } = {},
 ): Promise<{ data: T; headers: Headers }> {
-  const { mutation = false, ...requestInit } = init;
+  const { mutation = false, suppressSessionExpired = false, ...requestInit } = init;
   if (mutation && !csrfToken) await acquireCsrf();
   const headers = new Headers(requestInit.headers);
   headers.set("Accept", "application/json");
@@ -76,9 +85,8 @@ export async function apiResponse<T>(
   });
   const body = await readBody(response);
   if (!response.ok) {
-    if (response.status === 401 && path !== "/me" && typeof window !== "undefined") {
-      clearCsrf();
-      window.dispatchEvent(new CustomEvent("homing:session-expired"));
+    if (response.status === 401 && !suppressSessionExpired && typeof window !== "undefined") {
+      notifySessionExpired();
     }
     throw new ApiError(response.status, (body ?? {}) as ApiErrorBody);
   }
@@ -199,4 +207,12 @@ export type SourcePlanReview = {
   opened_at: string;
   last_reported_at: string;
   resolved_at: string | null;
+};
+
+export type InvitationDetails = {
+  email: string;
+  role: "owner" | "editor" | "viewer";
+  project: { id: string; name: string };
+  inviter_name?: string | null;
+  expires_at: string;
 };

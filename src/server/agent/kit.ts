@@ -221,8 +221,14 @@ function serveKit(request: Request, bytes: Uint8Array, type: string, maxAge: num
 
 export function createKitRouter(options: KitRouterOptions = {}): Hono {
   const app = new Hono();
+  const fixedPackage =
+    options.package ??
+    (typeof options.origin === "string"
+      ? buildKitPackage(options.origin, options.packageRoot)
+      : undefined);
+  const resolvePackage = (request: Request) => fixedPackage ?? packageFor(request, options);
   const publicFile = (request: Request, path: string, maxAge = KIT_CACHE_SECONDS): Response => {
-    const kit = packageFor(request, options);
+    const kit = resolvePackage(request);
     const bytes = kit.files.get(path);
     if (!bytes || (path !== "index.md" && !isRoutableKitPath(path))) throw notFound();
     return serveKit(request, bytes, contentType(path), maxAge);
@@ -239,11 +245,11 @@ export function createKitRouter(options: KitRouterOptions = {}): Hono {
   );
   app.on(safe, "/agent/pkg/SKILL.md", (c) => publicFile(c.req.raw, "SKILL.md"));
   app.on(safe, "/agent/pkg/manifest.json", (c) => {
-    const kit = packageFor(c.req.raw, options);
+    const kit = resolvePackage(c.req.raw);
     return serveKit(c.req.raw, kit.manifestBytes, "application/json", KIT_CACHE_SECONDS);
   });
   app.on(safe, "/agent/pkg/:archive", (c) => {
-    const kit = packageFor(c.req.raw, options);
+    const kit = resolvePackage(c.req.raw);
     if (c.req.param("archive") !== kit.archiveName) throw notFound();
     return serveKit(c.req.raw, kit.archiveBytes, "application/zip", KIT_CACHE_SECONDS);
   });

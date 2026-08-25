@@ -2,7 +2,7 @@ name: homing-ts-dev
 
 services:
   db:
-    image: postgres:17.5-alpine
+    image: postgres:17.11-alpine3.24
     restart: unless-stopped
     environment:
       POSTGRES_DB: homing

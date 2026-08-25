@@ -165,11 +165,17 @@ async function algorithmCounts(sourceUrl: string, projectId: string) {
   const source = postgres(sourceUrl, { max: 1, prepare: false });
   try {
     return await source<{ algorithm: string; count: number }[]>`
-      select split_part(u.password, '$', 1) as algorithm, count(*)::int as count
+      select case
+               when u.password like 'argon2$%' then 'argon2'
+               when u.password like 'pbkdf2_sha256$%' then 'pbkdf2_sha256'
+               when u.password = '' then 'empty'
+               else 'unsupported'
+             end as algorithm,
+             count(*)::int as count
         from projects_projectmembership m
         join accounts_user u on u.id = m.user_id
        where m.project_id = ${projectId}::uuid
-       group by split_part(u.password, '$', 1)
+       group by algorithm
        order by algorithm
     `;
   } finally {

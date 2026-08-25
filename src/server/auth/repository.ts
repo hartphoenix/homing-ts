@@ -31,7 +31,7 @@ export interface AuthRepository {
   createSession(input: CreateSessionInput): Promise<void>;
   /** Rotate the session and optionally rehash the password in one transaction. */
   completeLogin(
-    oldDigest: string,
+    oldDigest: string | null,
     input: CreateSessionInput,
     userId: number,
     passwordHash?: string,

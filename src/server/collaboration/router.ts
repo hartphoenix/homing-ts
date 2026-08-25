@@ -236,6 +236,7 @@ function projectWire(
   project: ProjectRecord,
   membership?: MembershipRecord | null,
   includePrompt = false,
+  includeCriteria = true,
 ): Record<string, unknown> {
   return {
     id: project.id,
@@ -246,7 +247,7 @@ function projectWire(
     role: membership?.role ?? null,
     creator_id: project.creatorId,
     prompt_revision: project.promptRevision,
-    criteria: project.criteria,
+    ...(includeCriteria ? { criteria: project.criteria } : {}),
     ...(includePrompt
       ? { prompt: project.currentPrompt, current_prompt: project.currentPrompt }
       : {}),
@@ -263,6 +264,7 @@ function leadWire(
     interestedUsers: string[];
     commentCount: number;
   },
+  visibility: { interest: boolean; comments: boolean } = { interest: true, comments: true },
 ): Record<string, unknown> {
   return {
     id: lead.id,
@@ -290,11 +292,15 @@ function leadWire(
     verification_notes: lead.verificationNotes,
     status: lead.status,
     trashed_at: lead.trashedAt?.toISOString() ?? null,
-    interested: stats?.interested ?? false,
-    is_interested: stats?.interested ?? false,
-    interest_count: stats?.interestCount ?? 0,
-    interested_users: stats?.interestedUsers ?? [],
-    comment_count: stats?.commentCount ?? 0,
+    ...(visibility.interest
+      ? {
+          interested: stats?.interested ?? false,
+          is_interested: stats?.interested ?? false,
+          interest_count: stats?.interestCount ?? 0,
+          interested_users: stats?.interestedUsers ?? [],
+        }
+      : {}),
+    ...(visibility.comments ? { comment_count: stats?.commentCount ?? 0 } : {}),
     creator_id: lead.creatorId,
     revision: lead.revision,
     created_at: lead.createdAt.toISOString(),
@@ -360,6 +366,10 @@ function requireScope(principal: CollaborationPrincipal, scope: string): void {
   }
 }
 
+function hasScope(principal: CollaborationPrincipal, scope: string): boolean {
+  return principal.authKind !== "bearer" || Boolean(principal.scopes?.includes(scope));
+}
+
 function actor(context: RequestContext, principal: CollaborationPrincipal) {
   return {
     userId: principal.userId,
@@ -386,15 +396,25 @@ function bodyHash(value: unknown): string {
 async function idempotent<T>(
   repository: CollaborationRepository,
   principal: CollaborationPrincipal,
+  projectId: string,
   endpoint: string,
   key: string | undefined,
   body: unknown,
+  scope: string | undefined,
   run: (repository: CollaborationRepository) => Promise<{ status: ContentfulStatusCode; body: T }>,
 ): Promise<{ status: ContentfulStatusCode; body: T }> {
-  if (!key) return run(repository);
+  if (!key) {
+    return repository.transaction(async (transaction) => {
+      await transaction.assertMembership(projectId, principal.userId);
+      if (scope) requireScope(principal, scope);
+      return run(transaction);
+    });
+  }
   if (key.length > 200)
     throw new HomingError("validation_error", "Idempotency key is too long.", 422);
   return repository.transaction(async (transaction) => {
+    await transaction.assertMembership(projectId, principal.userId);
+    if (scope) requireScope(principal, scope);
     await transaction.lockIdempotency(principal.userId, principal.tokenId ?? null, endpoint, key);
     const existing = await transaction.getIdempotency(
       principal.userId,
@@ -549,7 +569,12 @@ export function createCollaborationRouter(dependencies: CollaborationDependencie
     );
     const items = await Promise.all(
       projects.map(async (project) =>
-        projectWire(project, await repository.getMembership(project.id, principal.userId)),
+        projectWire(
+          project,
+          await repository.getMembership(project.id, principal.userId),
+          false,
+          hasScope(principal, "prompts:read"),
+        ),
       ),
     );
     const pausedUntil = await repository.getAgentPausedUntil(principal.userId);
@@ -617,7 +642,8 @@ export function createCollaborationRouter(dependencies: CollaborationDependencie
     const { project, membership } = await requireProject(repository, principal, projectId, {
       scope: "projects:read",
     });
-    const output = projectWire(project, membership, true);
+    const canReadPrompt = hasScope(principal, "prompts:read");
+    const output = projectWire(project, membership, canReadPrompt, canReadPrompt);
     return json(context, 200, output, { ETag: etag("project", project) });
   });
 
@@ -628,14 +654,11 @@ export function createCollaborationRouter(dependencies: CollaborationDependencie
     const { project, membership } = await requireProject(repository, principal, projectId);
     checkIfMatch(context, etag("project", project));
     const body = parseBody(projectPatchSchema, await readJson(context));
-    if (body.status === "trashed") {
-      if ((await repository.getMembership(projectId, principal.userId))?.role !== "owner")
-        throw new HomingError("forbidden", "Owner permission is required.", 403);
-    }
     const projectPatch: Partial<Pick<ProjectRecord, "name" | "slug" | "description" | "status">> =
       Object.fromEntries(Object.entries(body).filter(([, entry]) => entry !== undefined));
     const updated = await repository.transaction(async (transaction) => {
-      if (body.status === "trashed") await transaction.assertOwner(projectId, principal.userId);
+      if (body.status !== undefined) await transaction.assertOwner(projectId, principal.userId);
+      else await transaction.assertMembership(projectId, principal.userId);
       await transaction.updateProject(projectId, projectPatch);
       await transaction.recordMutation(
         projectId,
@@ -692,7 +715,7 @@ export function createCollaborationRouter(dependencies: CollaborationDependencie
     });
     checkIfMatch(context, etag("project", project));
     const updated = await repository.transaction(async (transaction) => {
-      await transaction.assertOwner(projectId, principal.userId);
+      await transaction.assertOwner(projectId, principal.userId, true);
       await transaction.updateProject(projectId, { status: "active" });
       await transaction.recordMutation(
         projectId,
@@ -774,6 +797,7 @@ export function createCollaborationRouter(dependencies: CollaborationDependencie
     let result: Awaited<ReturnType<CollaborationRepository["updatePrompt"]>>;
     try {
       result = await repository.transaction(async (transaction) => {
+        await transaction.assertMembership(projectId, principal.userId);
         const updated = await transaction.updatePrompt(
           projectId,
           body.expected_revision,
@@ -821,14 +845,21 @@ export function createCollaborationRouter(dependencies: CollaborationDependencie
     const projectId = pathId(context, "projectId");
     await requireProject(repository, principal, projectId);
     const members = await repository.listMemberships(projectId);
-    return json(context, 200, { items: members.map(memberWire) });
+    const pendingInvitations = await repository.listPendingInvitations(projectId, now());
+    return json(context, 200, {
+      items: members.map(memberWire),
+      pending_invitations: pendingInvitations.map((invitation) => ({
+        ...invitationWire(invitation),
+        status: "pending",
+      })),
+    });
   });
 
   app.post("/projects/:projectId/invitations", async (context) => {
     const principal = await getPrincipal(context, dependencies);
     requireSession(principal);
     const projectId = pathId(context, "projectId");
-    await requireProject(repository, principal, projectId);
+    await requireProject(repository, principal, projectId, { owner: true });
     const body = parseBody(memberSchema, await readJson(context));
     const token = makeInvitationToken();
     const invitation: InvitationRecord = {
@@ -844,6 +875,7 @@ export function createCollaborationRouter(dependencies: CollaborationDependencie
       createdAt: now(),
     };
     const created = await repository.transaction(async (transaction) => {
+      await transaction.assertOwner(projectId, principal.userId);
       const result = await transaction.createInvitation(invitation);
       await transaction.recordMutation(
         projectId,
@@ -859,6 +891,31 @@ export function createCollaborationRouter(dependencies: CollaborationDependencie
       ...invitationWire(created, token),
       invite_url: `/invitations/${token}/accept`,
     });
+  });
+
+  app.delete("/projects/:projectId/invitations", async (context) => {
+    const principal = await getPrincipal(context, dependencies);
+    requireSession(principal);
+    const projectId = pathId(context, "projectId");
+    await requireProject(repository, principal, projectId, { owner: true });
+    const body = parseBody(z.object({ invitation_id: uuid }).strict(), await readJson(context));
+    const revoked = await repository.transaction(async (transaction) => {
+      await transaction.assertOwner(projectId, principal.userId);
+      const result = await transaction.revokeInvitation(projectId, body.invitation_id, now());
+      if (!result) throw new HomingError("not_found", "Object not found.", 404);
+      await transaction.recordMutation(
+        projectId,
+        "invitation.revoked",
+        "invitation",
+        body.invitation_id,
+        {},
+        actor(context, principal),
+        { tombstone: true },
+      );
+      return result;
+    });
+    if (!revoked) throw new HomingError("not_found", "Object not found.", 404);
+    return new Response(null, { status: 204 });
   });
 
   app.patch("/projects/:projectId/members", async (context) => {
@@ -976,51 +1033,6 @@ export function createCollaborationRouter(dependencies: CollaborationDependencie
     return new Response(null, { status: 204 });
   });
 
-  app.post("/invitations/:token/accept", async (context) => {
-    const principal = await getPrincipal(context, dependencies);
-    requireSession(principal);
-    const token = context.req.param("token");
-    if (!/^[A-Za-z0-9_-]{20,}$/.test(token))
-      throw new HomingError("not_found", "Object not found.", 404);
-    const invitation = await repository.getInvitationByTokenDigest(digest(token));
-    if (
-      !invitation ||
-      invitation.acceptedAt ||
-      invitation.revokedAt ||
-      invitation.expiresAt <= now()
-    )
-      throw new HomingError("not_found", "Object not found.", 404);
-    if (
-      !principal.email ||
-      normalizeEmail(principal.email) !== invitation.email ||
-      !(await repository.isUserActive(invitation.inviterId)) ||
-      !(await repository.getMembership(invitation.projectId, invitation.inviterId))
-    )
-      throw new HomingError("not_found", "Object not found.", 404);
-    const membership = await repository.transaction(async (transaction) => {
-      const existing = await transaction.getMembership(invitation.projectId, principal.userId);
-      const joined =
-        existing ??
-        (await transaction.upsertMembership({
-          projectId: invitation.projectId,
-          userId: principal.userId,
-          role: invitation.role,
-          joinedAt: now(),
-        }));
-      await transaction.updateInvitation(invitation.id, { acceptedAt: now() });
-      await transaction.recordMutation(
-        invitation.projectId,
-        "invitation.accepted",
-        "invitation",
-        invitation.id,
-        { user_id: String(principal.userId) },
-        actor(context, principal),
-      );
-      return joined;
-    });
-    return json(context, 200, memberWire(membership));
-  });
-
   async function leadAccess(context: RequestContext, scope: string) {
     const principal = await getPrincipal(context, dependencies);
     const projectId = pathId(context, "projectId");
@@ -1028,8 +1040,16 @@ export function createCollaborationRouter(dependencies: CollaborationDependencie
     return { principal, projectId, project: access.project };
   }
 
-  async function wireLead(projectId: string, lead: LeadRecord, userId: number) {
-    return leadWire(lead, await repository.getLeadStats(projectId, lead.id, userId));
+  async function wireLead(projectId: string, lead: LeadRecord, principal: CollaborationPrincipal) {
+    const visibility = {
+      interest: hasScope(principal, "interest:read"),
+      comments: hasScope(principal, "comments:read"),
+    };
+    const stats =
+      visibility.interest || visibility.comments
+        ? await repository.getLeadStats(projectId, lead.id, principal.userId)
+        : undefined;
+    return leadWire(lead, stats, visibility);
   }
 
   async function listLeadResponse(
@@ -1037,10 +1057,7 @@ export function createCollaborationRouter(dependencies: CollaborationDependencie
     forcedStatus?: "active" | "trashed",
     forcedInterest?: "me",
   ) {
-    const { principal, projectId } = await leadAccess(
-      context,
-      forcedInterest ? "interest:read" : "leads:read",
-    );
+    const { principal, projectId } = await leadAccess(context, "leads:read");
     const statusValue =
       forcedStatus ??
       (context.req.query("status") === "trashed" || context.req.query("status") === "trash"
@@ -1077,6 +1094,15 @@ export function createCollaborationRouter(dependencies: CollaborationDependencie
       (context.req.query("interested_by") === "me" ? "me" : "all");
     if (!["all", "me", "anyone", "any"].includes(interestScope))
       throw new HomingError("validation_error", "interest_scope is invalid.", 422);
+    if (
+      forcedInterest ||
+      requestedSort === "interest" ||
+      interestScope === "me" ||
+      interestScope === "any" ||
+      interestScope === "anyone"
+    ) {
+      requireScope(principal, "interest:read");
+    }
     const result = await repository.listLeads(projectId, {
       status: statusValue,
       limit,
@@ -1089,7 +1115,7 @@ export function createCollaborationRouter(dependencies: CollaborationDependencie
       sort: requestedSort as NonNullable<LeadListOptions["sort"]>,
     });
     const items = await Promise.all(
-      result.items.map((lead) => wireLead(projectId, lead, principal.userId)),
+      result.items.map((lead) => wireLead(projectId, lead, principal)),
     );
     return json(context, 200, {
       items,
@@ -1120,9 +1146,11 @@ export function createCollaborationRouter(dependencies: CollaborationDependencie
     const result = await idempotent(
       repository,
       principal,
+      projectId,
       context.req.path,
       context.req.header("Idempotency-Key"),
       body,
+      "leads:write",
       async (transaction) => {
         const [written] = await transaction.bulkUpsertLeads(projectId, principal.userId, [
           convertLeadWrite(body),
@@ -1155,9 +1183,11 @@ export function createCollaborationRouter(dependencies: CollaborationDependencie
     const result = await idempotent(
       repository,
       principal,
+      projectId,
       context.req.path,
       context.req.header("Idempotency-Key"),
       body,
+      "leads:write",
       async (transaction) => {
         const results: Array<Record<string, unknown>> = [];
         for (const [index, raw] of body.items.entries()) {
@@ -1219,14 +1249,21 @@ export function createCollaborationRouter(dependencies: CollaborationDependencie
         : body.operations.some(
             (operation) => operation.operation === "trash" || operation.operation === "restore",
           );
+    const changesInterest =
+      "action" in body && (body.action === "interested" || body.action === "uninterested");
     if (destructive) requireScope(principal, "leads:destroy");
+    if (changesInterest) requireScope(principal, "interest:write");
     const result = await idempotent<Record<string, unknown>>(
       repository,
       principal,
+      projectId,
       context.req.path,
       context.req.header("Idempotency-Key"),
       body,
+      "leads:write",
       async (transaction) => {
+        if (destructive) requireScope(principal, "leads:destroy");
+        if (changesInterest) requireScope(principal, "interest:write");
         const outputs: Array<Record<string, unknown>> = [];
         if ("action" in body) {
           const selected = await Promise.all(
@@ -1343,7 +1380,7 @@ export function createCollaborationRouter(dependencies: CollaborationDependencie
     const leadId = pathId(context, "leadId");
     const lead = await repository.getLead(projectId, leadId);
     if (!lead) throw new HomingError("not_found", "Object not found.", 404);
-    return json(context, 200, await wireLead(projectId, lead, principal.userId), {
+    return json(context, 200, await wireLead(projectId, lead, principal), {
       ETag: leadEtag(lead),
     });
   });
@@ -1393,6 +1430,8 @@ export function createCollaborationRouter(dependencies: CollaborationDependencie
     let updated: LeadRecord;
     try {
       updated = await repository.transaction(async (transaction) => {
+        requireScope(principal, "leads:write");
+        await transaction.assertMembership(projectId, principal.userId);
         const result = await transaction.updateLead(projectId, leadId, expectedRevision, patch);
         await transaction.recordMutation(
           projectId,
@@ -1412,7 +1451,7 @@ export function createCollaborationRouter(dependencies: CollaborationDependencie
         });
       throw error;
     }
-    return json(context, 200, await wireLead(projectId, updated, principal.userId), {
+    return json(context, 200, await wireLead(projectId, updated, principal), {
       ETag: leadEtag(updated),
     });
   });
@@ -1431,6 +1470,8 @@ export function createCollaborationRouter(dependencies: CollaborationDependencie
     )
       throw new HomingError("stale_write", "The lead changed since it was read.", 409);
     const updated = await repository.transaction(async (transaction) => {
+      requireScope(principal, "leads:destroy");
+      await transaction.assertMembership(projectId, principal.userId);
       const result = await transaction.setLeadStatus(
         projectId,
         leadId,
@@ -1449,7 +1490,7 @@ export function createCollaborationRouter(dependencies: CollaborationDependencie
       );
       return result;
     });
-    return json(context, 200, await wireLead(projectId, updated, principal.userId), {
+    return json(context, 200, await wireLead(projectId, updated, principal), {
       ETag: leadEtag(updated),
     });
   }
@@ -1472,6 +1513,7 @@ export function createCollaborationRouter(dependencies: CollaborationDependencie
     if (!current) throw new HomingError("not_found", "Object not found.", 404);
     requiredLeadRevision(context, current);
     await repository.transaction(async (transaction) => {
+      requireScope(principal, "leads:destroy");
       await transaction.assertOwner(projectId, principal.userId);
       await transaction.permanentlyDeleteLead(projectId, leadId);
       await transaction.recordMutation(
@@ -1495,6 +1537,8 @@ export function createCollaborationRouter(dependencies: CollaborationDependencie
       throw new HomingError("not_found", "Object not found.", 404);
     const body = parseBody(interestSchema, await readJson(context));
     const interested = await repository.transaction(async (transaction) => {
+      requireScope(principal, "interest:write");
+      await transaction.assertMembership(projectId, principal.userId);
       const before = await transaction.getInterest(projectId, leadId, principal.userId);
       const result = await transaction.setInterest(
         projectId,
@@ -1522,6 +1566,8 @@ export function createCollaborationRouter(dependencies: CollaborationDependencie
     if (!lead || lead.status === "trashed")
       throw new HomingError("not_found", "Object not found.", 404);
     await repository.transaction(async (transaction) => {
+      requireScope(principal, "interest:write");
+      await transaction.assertMembership(projectId, principal.userId);
       const before = await transaction.getInterest(projectId, leadId, principal.userId);
       await transaction.setInterest(projectId, leadId, principal.userId, true);
       if (!before)
@@ -1543,6 +1589,8 @@ export function createCollaborationRouter(dependencies: CollaborationDependencie
     if (!lead || lead.status === "trashed")
       throw new HomingError("not_found", "Object not found.", 404);
     await repository.transaction(async (transaction) => {
+      requireScope(principal, "interest:write");
+      await transaction.assertMembership(projectId, principal.userId);
       const before = await transaction.getInterest(projectId, leadId, principal.userId);
       await transaction.setInterest(projectId, leadId, principal.userId, false);
       if (before)
@@ -1587,10 +1635,26 @@ export function createCollaborationRouter(dependencies: CollaborationDependencie
     const result = await idempotent(
       repository,
       principal,
+      projectId,
       context.req.path,
       context.req.header("Idempotency-Key"),
       body,
+      "comments:write",
       async (transaction) => {
+        const currentLead = await transaction.getLead(projectId, leadId);
+        if (currentLead?.status !== "active") {
+          throw new HomingError("not_found", "Object not found.", 404);
+        }
+        if (
+          body.parent_id !== undefined &&
+          !(await transaction.getComment(projectId, leadId, body.parent_id))
+        ) {
+          throw new HomingError(
+            "validation_error",
+            "The parent comment must belong to this lead.",
+            422,
+          );
+        }
         const comment: CommentRecord = {
           id: 0,
           leadId,
@@ -1635,6 +1699,18 @@ export function createCollaborationRouter(dependencies: CollaborationDependencie
       throw new HomingError("forbidden", "Comment permission is required.", 403);
     const body = parseBody(commentPatchSchema, await readJson(context));
     const updated = await repository.transaction(async (transaction) => {
+      if (comment.authorId === principal.userId) {
+        requireScope(principal, "comments:write");
+        await transaction.assertMembership(projectId, principal.userId);
+      } else {
+        requireScope(principal, "comments:write");
+        await transaction.assertOwner(projectId, principal.userId);
+      }
+      const currentLead = await transaction.getLead(projectId, leadId);
+      const currentComment = await transaction.getComment(projectId, leadId, commentId);
+      if (currentLead?.status !== "active" || !currentComment) {
+        throw new HomingError("not_found", "Object not found.", 404);
+      }
       const result = await transaction.updateComment(commentId, {
         body: body.body,
         editedAt: now(),
@@ -1670,6 +1746,18 @@ export function createCollaborationRouter(dependencies: CollaborationDependencie
     )
       throw new HomingError("forbidden", "Comment permission is required.", 403);
     await repository.transaction(async (transaction) => {
+      if (comment.authorId === principal.userId) {
+        requireScope(principal, "comments:write");
+        await transaction.assertMembership(projectId, principal.userId);
+      } else {
+        requireScope(principal, "comments:write");
+        await transaction.assertOwner(projectId, principal.userId);
+      }
+      const currentLead = await transaction.getLead(projectId, leadId);
+      const currentComment = await transaction.getComment(projectId, leadId, commentId);
+      if (currentLead?.status !== "active" || !currentComment) {
+        throw new HomingError("not_found", "Object not found.", 404);
+      }
       await transaction.updateComment(commentId, { deletedAt: now() });
       await transaction.recordMutation(
         projectId,

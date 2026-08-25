@@ -39,6 +39,18 @@ test("invites, renders pending rows, and gives owners removal controls", async (
       body: JSON.stringify({ csrf_token: "test-csrf-token" }),
     });
   });
+  await page.route("**/api/v1/me/source-plan-reviews**", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ items: [] }),
+    });
+  });
+  await page.route(`**/api/v1/projects/${projectId}/leads?limit=1`, async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ items: [], total: 0 }),
+    });
+  });
   await page.route(`**/api/v1/projects/${projectId}`, async (route) => {
     await route.fulfill({
       contentType: "application/json",
@@ -84,6 +96,7 @@ test("invites, renders pending rows, and gives owners removal controls", async (
       role: body.role,
       status: "pending" as const,
       expires_at: "2026-08-29T12:00:00Z",
+      invite_url: "/invitations/one-time-token/accept",
     };
     pendingInvitations.push(invitation);
     await route.fulfill({
@@ -97,10 +110,16 @@ test("invites, renders pending rows, and gives owners removal controls", async (
 
   await page.getByRole("button", { name: "Invite" }).click();
   await page.getByLabel("Email address").fill("new-member@example.test");
-  await page.getByRole("button", { name: "Send" }).click();
+  await page.getByRole("button", { name: "Create invite link" }).click();
+
+  await expect(page.getByLabel("Invitation link")).toHaveValue(
+    "http://127.0.0.1:4174/invitations/one-time-token/accept",
+  );
+  await expect(page.getByLabel("Invitation link")).toHaveAttribute("readonly", "");
 
   const pendingRow = page.locator(".member-row").filter({ hasText: "new-member@example.test" });
   await expect(pendingRow).toContainText("Pending");
+  await expect(pendingRow).not.toContainText("one-time-token");
   await expect(page.getByRole("button", { name: "Invite" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Remove" })).toHaveCount(2);
   await expect(

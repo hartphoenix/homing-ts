@@ -1,6 +1,5 @@
 import { eq, sql } from "drizzle-orm";
 
-import { DEMO_ACCOUNTS, DEMO_PASSWORD } from "../../dev/demo-accounts";
 import { hashPassword } from "../auth/password";
 import { getDatabase } from "./client";
 import { leads, profiles, projects, users } from "./schema";
@@ -141,6 +140,9 @@ const DEMO_LEADS = [
 ] as const;
 
 export async function seedDemoAccounts(): Promise<void> {
+  // Keep development-only fixtures out of the production runtime image. The
+  // production entrypoint rejects HOMING_DEMO_ACCOUNTS before this is called.
+  const { DEMO_ACCOUNTS, DEMO_PASSWORD } = await import("../../dev/demo-accounts");
   const database = getDatabase();
   const passwordHash = await hashPassword(DEMO_PASSWORD);
 
