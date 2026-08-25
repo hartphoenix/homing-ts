@@ -57,6 +57,10 @@ describe("production router composition", () => {
     const changes = new InMemoryChangeRepository();
     const app = createApp({
       ready: async () => true,
+      spaIndex: () =>
+        new Response("<!doctype html><title>Homing test</title>", {
+          headers: { "Content-Type": "text/html; charset=utf-8" },
+        }),
       auth: { repo: rejectingAuthRepository(), origin: ORIGIN },
       agent: {
         changes: { service: new ChangeService(changes) },

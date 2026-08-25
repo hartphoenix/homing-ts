@@ -21,6 +21,7 @@ import type { AppVariables } from "./types";
 
 type AppDependencies = {
   ready?: () => Promise<boolean>;
+  spaIndex?: () => Response | Promise<Response>;
   auth?: AuthRouterDependencies;
   agent?: Omit<AgentCoreRouterOptions, "principal">;
   collaboration?: Omit<CollaborationDependencies, "principal">;
@@ -38,12 +39,14 @@ async function databaseReady(): Promise<boolean> {
 export function createApp(dependencies: AppDependencies = {}) {
   const app = new Hono<{ Variables: AppVariables }>();
   const ready = dependencies.ready ?? databaseReady;
-  const spaIndex = async () =>
-    typeof Bun === "undefined"
-      ? new Response(await readFile("dist/client/index.html"), {
-          headers: { "Content-Type": "text/html; charset=utf-8" },
-        })
-      : new Response(Bun.file("dist/client/index.html"));
+  const spaIndex =
+    dependencies.spaIndex ??
+    (async () =>
+      typeof Bun === "undefined"
+        ? new Response(await readFile("dist/client/index.html"), {
+            headers: { "Content-Type": "text/html; charset=utf-8" },
+          })
+        : new Response(Bun.file("dist/client/index.html")));
 
   app.use("*", requestId({ headerName: "X-Request-ID", limitLength: 80 }));
   app.use("*", requestLogger());
