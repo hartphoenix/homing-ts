@@ -13,8 +13,8 @@ ENV NODE_ENV=production
 ENV HOMING_DEMO_ACCOUNTS=0
 WORKDIR /opt/app
 RUN addgroup -g 10001 -S app && adduser -u 10001 -S app -G app
-COPY package.json bun.lock ./
-COPY patches ./patches
+COPY --chown=app:app package.json bun.lock ./
+COPY --chown=app:app patches ./patches
 RUN bun install --frozen-lockfile --production
 COPY --from=build --chown=app:app /opt/app/dist ./dist
 COPY --chown=app:app agentkit ./agentkit
