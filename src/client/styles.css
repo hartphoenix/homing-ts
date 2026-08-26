@@ -916,6 +916,40 @@ textarea {
   padding-top: 1.5rem;
 }
 
+.agent-service-entrance h2 {
+  margin-top: 0;
+}
+
+.pairing-codes {
+  margin-top: 1.5rem;
+  border-top: 1px solid var(--line);
+  padding-top: 1rem;
+}
+
+.pairing-codes summary {
+  width: fit-content;
+  cursor: pointer;
+  color: var(--ink);
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+.pairing-codes-content {
+  display: grid;
+  gap: 1.5rem;
+}
+
+.pairing-codes .agent-pairing-entry {
+  border-top: 0;
+  margin-top: 0;
+  padding-top: 1.5rem;
+}
+
+.pairing-codes .manual-token-form {
+  margin-top: 0;
+}
+
 .one-time-key {
   display: grid;
   gap: 0.7rem;

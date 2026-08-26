@@ -1948,91 +1948,107 @@ function AgentSetupPage() {
 
   return (
     <Placeholder title="Agent setup">
-      <section className="agent-pairing-entry">
-        <h2>Pair an existing agent</h2>
-        <p className="quiet">
-          Enter the six-character code shown by an agent that is waiting for approval.
-        </p>
-        <form
-          className="pairing-code-form"
-          onSubmit={(event) => {
-            event.preventDefault();
-            navigate(`/link/?code=${encodeURIComponent(pairCode.trim().toUpperCase())}`);
-          }}
-        >
-          <label>
-            Pairing code
-            <input
-              autoCapitalize="characters"
-              autoComplete="one-time-code"
-              inputMode="text"
-              maxLength={6}
-              onChange={(event) => setPairCode(event.target.value.replace(/[^a-z0-9]/gi, ""))}
-              required
-              spellCheck={false}
-              value={pairCode}
-            />
-          </label>
-          <button className="button" disabled={pairCode.trim().length < 6} type="submit">
-            Review request
-          </button>
-        </form>
-      </section>
-      <section className="manual-token-form">
-        <h2>Create a manual access key</h2>
-        <p className="quiet">
-          Use this only when pairing is unavailable. The full key is shown once.
-        </p>
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            createToken.mutate();
-          }}
-        >
-          <label>
-            Key name
-            <input
-              autoComplete="off"
-              maxLength={120}
-              onChange={(event) => setKeyName(event.target.value)}
-              required
-              value={keyName}
-            />
-          </label>
-          <Message error={createToken.error} />
-          <button
-            className="button"
-            disabled={createToken.isPending || !keyName.trim()}
-            type="submit"
-          >
-            {createToken.isPending ? "Creating…" : "Create access key"}
-          </button>
-        </form>
-        {newAccessKey && (
-          <div className="one-time-key" role="status">
-            <strong>Copy this key now. It will not be shown again.</strong>
-            <label>
-              New access key
-              <input aria-label="New access key" readOnly value={newAccessKey} />
-            </label>
-            <button
-              className="button"
-              onClick={async () => {
-                try {
-                  await navigator.clipboard.writeText(newAccessKey);
-                  setCopyStatus("Access key copied.");
-                } catch {
-                  setCopyStatus("Copy failed. Select the key manually.");
-                }
+      {showSetupPrompt && (
+        <section className="agent-service-entrance">
+          <h2>Give your agent a secure service entrance</h2>
+          <p>
+            Copy the setup prompt, paste it into your agent&apos;s chat window, and answer a few
+            questions. Homing will supply your agent with instructions and a unique key, which you
+            can manage from this page.
+          </p>
+          {promptControls}
+        </section>
+      )}
+      <details className="pairing-codes">
+        <summary>Pairing codes</summary>
+        <div className="pairing-codes-content">
+          <section className="agent-pairing-entry">
+            <h2>Pair an existing agent</h2>
+            <p className="quiet">
+              Enter the six-character code shown by an agent that is waiting for approval.
+            </p>
+            <form
+              className="pairing-code-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                navigate(`/link/?code=${encodeURIComponent(pairCode.trim().toUpperCase())}`);
               }}
-              type="button"
             >
-              Copy access key
-            </button>
-            <span className="copy-status">{copyStatus}</span>
-          </div>
-        )}
-      </section>
+              <label>
+                Pairing code
+                <input
+                  autoCapitalize="characters"
+                  autoComplete="one-time-code"
+                  inputMode="text"
+                  maxLength={6}
+                  onChange={(event) => setPairCode(event.target.value.replace(/[^a-z0-9]/gi, ""))}
+                  required
+                  spellCheck={false}
+                  value={pairCode}
+                />
+              </label>
+              <button className="button" disabled={pairCode.trim().length < 6} type="submit">
+                Review request
+              </button>
+            </form>
+          </section>
+          <section className="manual-token-form">
+            <h2>Create a manual access key</h2>
+            <p className="quiet">
+              Use this only when pairing is unavailable. The full key is shown once.
+            </p>
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                createToken.mutate();
+              }}
+            >
+              <label>
+                Key name
+                <input
+                  autoComplete="off"
+                  maxLength={120}
+                  onChange={(event) => setKeyName(event.target.value)}
+                  required
+                  value={keyName}
+                />
+              </label>
+              <Message error={createToken.error} />
+              <button
+                className="button"
+                disabled={createToken.isPending || !keyName.trim()}
+                type="submit"
+              >
+                {createToken.isPending ? "Creating…" : "Create access key"}
+              </button>
+            </form>
+            {newAccessKey && (
+              <div className="one-time-key" role="status">
+                <strong>Copy this key now. It will not be shown again.</strong>
+                <label>
+                  New access key
+                  <input aria-label="New access key" readOnly value={newAccessKey} />
+                </label>
+                <button
+                  className="button"
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(newAccessKey);
+                      setCopyStatus("Access key copied.");
+                    } catch {
+                      setCopyStatus("Copy failed. Select the key manually.");
+                    }
+                  }}
+                  type="button"
+                >
+                  Copy access key
+                </button>
+                <span className="copy-status">{copyStatus}</span>
+              </div>
+            )}
+          </section>
+        </div>
+      </details>
       {import.meta.env.DEV && (
         <label className="dev-preview-toggle">
           <input
@@ -2046,17 +2062,6 @@ function AgentSetupPage() {
       <Message error={tokens.error} />
       {tokens.isLoading && !previewActiveKey && (
         <p className="quiet small">Checking existing access keys…</p>
-      )}
-      {showSetupPrompt && (
-        <>
-          <h2>Give your agent a secure service entrance</h2>
-          <p>
-            Copy the setup prompt, paste it into your agent&apos;s chat window, and answer a few
-            questions. Homing will supply your agent with instructions and a unique key, which you
-            can manage from this page.
-          </p>
-          {promptControls}
-        </>
       )}
       {hasActiveKey && (
         <>

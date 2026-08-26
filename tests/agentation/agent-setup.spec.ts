@@ -34,6 +34,18 @@ test("reveals and copies the setup prompt when no access key exists", async ({ c
     page.getByRole("heading", { name: "Give your agent a secure service entrance" }),
   ).toBeVisible();
 
+  const pairingCodes = page.getByText("Pairing codes", { exact: true });
+  await expect(pairingCodes).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Pair an existing agent" })).not.toBeVisible();
+  await pairingCodes.click();
+  await expect(page.getByRole("heading", { name: "Pair an existing agent" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Create a manual access key" })).toBeVisible();
+
+  const contentOrder = await page
+    .locator(".panel.prose")
+    .evaluate((panel) => Array.from(panel.children).map((child) => child.className));
+  expect(contentOrder.slice(0, 2)).toEqual(["agent-service-entrance", "pairing-codes"]);
+
   const previewToggle = page.getByRole("checkbox", { name: "Preview active agent key" });
   await previewToggle.check();
   await expect(page.getByRole("heading", { name: "Your agent is connected" })).toBeVisible();
