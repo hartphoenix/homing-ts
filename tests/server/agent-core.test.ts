@@ -538,10 +538,27 @@ describe("source-plan reviews and repair guidance", () => {
   });
 });
 
-describe("public unchanged agent kit", () => {
+describe("public agent kit", () => {
   it("builds deterministic substituted bytes and serves the complete allowlist contract", async () => {
     const first = buildKitPackage("https://homing.test");
     const second = buildKitPackage("https://homing.test");
+    expect(first.version).toBe(3);
+
+    const setup = readFileSync("agentkit/package/SKILL.md", "utf8");
+    const phase2 = setup.indexOf("## Phase 2");
+    const phase3 = setup.indexOf("## Phase 3");
+    const phase4 = setup.indexOf("## Phase 4");
+    const phase7 = setup.indexOf("## Phase 7");
+    expect(phase2).toBeGreaterThan(-1);
+    expect(phase3).toBeGreaterThan(phase2);
+    expect(phase4).toBeGreaterThan(phase3);
+    expect(phase7).toBeGreaterThan(phase4);
+    expect(setup.slice(phase2, phase3)).toContain("homing.py pair-request");
+    expect(setup.slice(phase2, phase3)).not.toContain("install.py");
+
+    const installer = readFileSync("agentkit/package/scripts/install.py", "utf8");
+    expect(installer).toContain("capabilities.json");
+    expect(installer).toContain('"needs_setup": needs_setup');
     expect(first.archiveBytes).toEqual(second.archiveBytes);
     expect(first.archiveBytes.byteLength).toBeLessThanOrEqual(256 * 1024);
     expect(

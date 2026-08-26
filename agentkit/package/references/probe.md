@@ -4,7 +4,7 @@ Load this in Phase 1, before you ask the user anything.
 
 ## Run the probe once
 
-Run `scripts/probe.sh` (POSIX) or `scripts/probe.ps1` (Windows) **one time**. One subprocess,
+Run `sh scripts/probe.sh` (POSIX) or `scripts/probe.ps1` (Windows) **one time**. One subprocess,
 one JSON blob on stdout, read-only. Never re-run it per decision, and never inside the
 scheduled job. No shell tool at all → the probe cannot run; take the no-shell branch in
 `SKILL.md`.
@@ -89,7 +89,8 @@ Two misreads to guard against, both observed in the wild:
 
 ## Reading `prior_install`
 
-`found:true` means **do not create a second install**. Diff it, report its health, offer repair,
+`found:true` means an exact scout artifact was found, not merely another Homing directory or
+backup job. **Do not create a second install.** Diff it, report its health, offer repair,
 upgrade, or removal. Check `lock`: a lock older than twice the expected run time is stale, and a
 job that exits 0 on a stale lock looks healthy while doing nothing. Say so specifically — "your
 daily check has been stuck since Tuesday and hasn't actually run" — not "an install exists".

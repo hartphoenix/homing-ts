@@ -80,9 +80,8 @@ Fetch in this order, and only as far as the procedure actually takes you:
 6. `pkg/references/runtime-template.md` — Phase 7.
 7. `pkg/references/troubleshooting.md` — only when something has failed.
 
-No shell means no probe script, no scheduler, and no generated files. That is a supported outcome,
-not a failure: `SKILL.md` routes you to connect the account and then to run the search yourself
-whenever the person asks. Say so plainly rather than implying a schedule exists.
+No shell means the secure pairing client cannot run. `SKILL.md` stops and recommends a
+shell-capable local assistant; it never substitutes an access key pasted into chat.
 
 ## Then
 

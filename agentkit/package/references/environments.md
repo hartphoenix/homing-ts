@@ -594,7 +594,7 @@ What holds the run at rung 0 is not the OS, and the install report says so in th
 
 * the paired token carries no `leads:destroy` scope, and the client has no destructive verb;
 * `sources.py` holds no credential at all, so an untrusted page can never reach one;
-* the model is started with a fixed argument list and gets `JUDGE.md` plus two files — no
+* the model is started with a fixed argument list and gets `JUDGE.md` plus three files — no
   shell, no network of its own, no credential, no other file on the machine;
 * the runner bounds every run from outside the model: wall clock, memory, largest file, kit
   calls per run, writes per run, zero deletes;

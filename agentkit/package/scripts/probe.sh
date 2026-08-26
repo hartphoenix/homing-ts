@@ -830,7 +830,6 @@ PI_MANIFEST=""
 
 for _sd in "$CFG_DEFAULT" "$STATE_DEFAULT" "$LOG_DEFAULT" "$HOME_DIR/.homing"; do
     if [ -d "$_sd" ]; then
-        PI_FOUND=true
         jadd PI_STATE "$(js "$_sd")"
     fi
 done
@@ -860,7 +859,7 @@ for _lk in "$STATE_DEFAULT/run.lock" "$CFG_DEFAULT/run.lock"; do
 done
 
 if [ "$OS_ID" = macos ]; then
-    for _pl in "$HOME_DIR/Library/LaunchAgents"/*homing*.plist "$HOME_DIR/Library/LaunchAgents"/*Homing*.plist; do
+    for _pl in "$HOME_DIR/Library/LaunchAgents/com.homing.check.plist"; do
         if [ -e "$_pl" ]; then
             PI_FOUND=true
             _lbl="$(sed -n 's#.*<string>\([A-Za-z0-9._-]*homing[A-Za-z0-9._-]*\)</string>.*#\1#p' "$_pl" 2>/dev/null | head -1)"
@@ -869,7 +868,7 @@ if [ "$OS_ID" = macos ]; then
         fi
     done
 elif [ "$OS_ID" = linux ]; then
-    for _un in "$SCHED_DIR"/*homing*; do
+    for _un in "$SCHED_DIR/homing-check.service" "$SCHED_DIR/homing-check.timer"; do
         if [ -e "$_un" ]; then
             PI_FOUND=true
             jadd PI_SCHED "{$(js kind):$(js systemd-user),$(js label):$(js "$(basename "$_un")"),$(js path):$(js "$_un"),$(js source):$(js file)}"

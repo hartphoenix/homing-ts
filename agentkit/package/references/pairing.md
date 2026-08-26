@@ -10,65 +10,30 @@ presses Approve. That is the whole job you are asking of them.
 transcript, in argv, in a log, or in any file you later read. The `user_code` is not a secret —
 you must show it.
 
-Both credentials are handled inside `homing.py`, in one process, by two subcommands:
-`pair-request` and `pair-poll`. Never make these two HTTP calls with your own fetch tool, and
-never read the device-code file. If you do either, the code lands in your context and the
-pairing is compromised.
+Both credentials are handled inside the shipped `homing.py` by two subcommands: `pair-request`
+and `pair-poll`. Never make these HTTP calls with your own fetch tool, and never read the
+device-code file.
 
-## Path A — the person runs one line (default)
+## Setup flow
 
-`install.py` generates the wrapper. You do not run the pairing yourself: you tell the person to
-run one line, then read the two safe files it writes.
+Pair before installation. This breaks the dependency cycle: account access is available before
+the project prompts and source plan are read.
 
-| Path | Mode | What it is |
-|---|---|---|
-| `<config>/connect.sh` (POSIX) / `<config>/connect.ps1` (Windows) | 0700 | the one line a person runs; holds no key |
-| `<config>/bin/homing.py` | 0500 | the client both calls go through |
-| `<config>/private/device-code.json` | 0600 | the device code, raw, alone. **Never read this.** Deleted when pairing ends |
-| `<state>/pairing.json` | 0600 | safe metadata: `user_code`, links, `expires_at`, `interval`. Read this |
-| `<state>/pairing-result.json` | 0600 | outcome only: `paired`, `error_class`, `expires_at`, `scopes`. Read this |
-| `<config>/set-token.sh` / `.ps1` | 0700 | the fallback of Path B, when pairing cannot be used at all |
+1. Create two temporary owner-only directories: one for safe output and one for the private
+   device code. Never list or read the private directory.
+2. Run `pair-request` with `--out <safe>/pairing.json` and
+   `--device-code-out <private>/device-code.json`.
+3. Read only `<safe>/pairing.json`. Show the user its link and six-character code using the exact
+   wording below.
+4. Run `pair-poll --device-code-file <private>/device-code.json --store
+   --result <safe>/pairing-result.json`. Set `HOMING_TOKEN_STORE` and its non-secret service or
+   path to the values chosen from the probe; the installer must later receive the same values.
+5. Read only `<safe>/pairing-result.json`. Remove both temporary directories when pairing ends.
 
-`<config>/private/` exists only for the pairing helper. It is named in no config file, no state
-file and no skill file, and nothing else in the install points at it.
-
-1. Tell the user to run exactly one line and leave the window open:
-   `sh <config>/connect.sh` — or `powershell -NoProfile -ExecutionPolicy Bypass -File
-   <config>\connect.ps1` on Windows.
-2. The script runs `pair-request`, prints the code and the link itself, and waits.
-3. Read `<state>/pairing.json` and say the wording below, so the code the user sees on screen,
-   the code you say, and the code on the approval card are the same three codes.
-4. When the script exits, read `<state>/pairing-result.json`. That file is the whole answer.
-
-### The contract between the wrapper and the client
-
-`connect.sh` / `connect.ps1` are thin: they own the private directory and the deletion trap,
-and they call these two commands and nothing else. The exact lines, with the exact paths:
-
-```
-"$PY" "$HOMING_PY" pair-request --label <worker label> --note <machine name> \
-      --cadence <minutes> --out "<state>/pairing.json" \
-      --device-code-out "<config>/private/device-code.json"
-
-"$PY" "$HOMING_PY" pair-poll --device-code-file "<config>/private/device-code.json" \
-      --store --result "<state>/pairing-result.json"
-```
-
-Rules the wrapper must keep:
-
-- `umask 077` before creating anything, and `<config>/private/` at 0700. Never create wide and
-  narrow afterwards.
-- `trap 'rm -f "$DEVICE_CODE"' EXIT INT TERM HUP` (PowerShell: `finally { Remove-Item -Force }`).
-  `pair-poll` deletes the file itself on every ending, including Ctrl-C; the trap covers the
-  window between the two commands.
-- **Export the same key-store environment the runtime uses** — `HOMING_TOKEN_STORE`, and
-  `HOMING_TOKEN_FILE` or `HOMING_KEYCHAIN_SERVICE` — *before* calling `pair-poll`. `--store`
-  writes to whichever store those name (defaulting to this platform's), and `run.sh` reads from
-  whatever it exports. If the two disagree the pairing looks fine and every scheduled run then
-  fails with exit 78.
-- No `eval`, no `sh -c`, no `Invoke-Expression`, and no key or device code in any argument.
-- The wrapper reads only `user_code` / `verification_uri_complete` out of `--out`, and prints
-  the result file's *path* on failure, never its contents plus a guess.
+Use `umask 077` before creating either directory. Do not use `eval`, `sh -c`, or
+`Invoke-Expression`. The key and device code never appear in an argument. The generated
+`connect.sh` or `connect.ps1` remains available after installation for reconnection and rotation;
+initial setup no longer depends on it.
 
 ## The two subcommands
 
@@ -185,20 +150,11 @@ Then, in every case:
 - The key never goes in the launchd plist, systemd unit, or scheduled-task definition —
   `launchctl print`, `systemctl show`, and `schtasks /query /v` all print those in cleartext.
 
-## Path B — manual fallback
+## If pairing cannot run
 
-**This is the second choice and you say so.** Use it only when pairing genuinely cannot work
-here: no outbound POST at all, or a store that only a person at the keyboard can write. The
-user opens Homing, creates an access key in the web UI, and pastes it into
-`<config>/set-token.sh` / `.ps1`, which reads it without echoing and puts it in the same store.
-
-Say the true sentence before they start: **"To do it this way I'll have to see your access key,
-and it will pass through your clipboard and possibly this chat. If you'd rather not, we can stop
-here."**
-
-If they proceed, treat the key as compromised at birth: a separate key for this installation
-only, labelled so Homing shows it was exposed. Never ask for their Homing password and never
-call `POST /auth/token`.
+Stop. Do not turn failure of the secure approval flow into a request for an access key. The
+generated `set-token.sh` / `.ps1` remains a recovery tool for an already-installed worker, not an
+initial setup path.
 
 ## Later, at run time
 

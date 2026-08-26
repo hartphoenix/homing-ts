@@ -215,8 +215,10 @@ Anything absent gets the slug rule. Never invent a prettier name.
 
 At the top level, add `project_prompt_revisions`: an object mapping every active project UUID read
 fresh in Phase 3 to its non-negative integer `prompt_revision`. This is the source plan's review
-basis, not cached search criteria. Store no project prompt, criteria, name, or description in
-`sources.json`. On repair, refresh the entire mapping immediately before running the installer.
+basis, not cached search criteria. A revision change alone does not require setup: the scout uses
+the current prompt on every run and asks for setup only when these sources no longer cover it.
+Store no project prompt, criteria, name, or description in `sources.json`. On repair, refresh the
+entire mapping immediately before running the installer.
 
 One object per source in `sources.json`, which is also the runtime's **fetch host allowlist** —
 a host absent from it is never fetched.
@@ -226,6 +228,7 @@ a host absent from it is never fetched.
 | `slug` | §4. Becomes the lead's `source`. |
 | `tier` | `sanctioned` \| `inbox` \| `community` \| `residential` \| `human` |
 | `channel` | `rss` \| `sitemap` \| `json` \| `html` — **exactly these four.** `sources.py` rejects any other value, so a source with `channel: "api"` or `"jsonld"` fails schema validation and never runs. A documented JSON API is `json`; a page carrying JSON-LD is `html` (the extractor reads the structured data out of it). `sitemap` is **discovery-only, by design**: it yields listing URLs and `lastmod` dates and never fetches a detail page, so title, price and location come back empty on every sitemap record — that is not a failure, and nothing should imply richer matching from this channel. Tiers that are not machine-fetched (`inbox`, `human`) have no entry in this list at all — they reach you by mail or by hand, not through a fetch. |
+| `coverage` | One plain sentence naming the geography and housing market this source can search, for example `Residential rentals and sales across New York City`. This lets the scout distinguish an ordinary criteria change from a request that needs a different source. Do not copy project text here. |
 | `url_template` | Exact URL with `{}` slots. No guessed `/api/` routes — disallowed on zillow, rightmove, zoopla, streeteasy, daft, wg-gesucht, hotpads, zumper (**V** each). |
 | `permitted_by` | The literal granting rule: `robots:Allow /api/sitemap*` · `llms.txt:rental_search_assistants` · `api-key:domain-au` · `user-mailbox` · `tos:default-allow`. **If this cannot be filled with a specific citation, the source is not usable.** |
 | `id_rule` | How `source_listing_id` is extracted. Exhaustive — `sources.py` rejects anything else as a schema error at load: `path_segment:<i>` / `path:<i>` (negative `<i>` counts from the end, so `path_segment:-1` on daft → `6645832`), `query:<name>`, `feed:guid`, `feed:id`, bare `guid`, `jsonld:@id`, `jsonld:identifier`, `jsonld:sku`, `jsonld:url`, `kyero:<field>` (a named field of the parsed Kyero record — `kyero:id`, `kyero:ref`, never a bare `kyero:<id>` placeholder), `reddit:fullname` (also `reddit:name`, `reddit:id`), or the field left absent, which falls back to whatever the parser already called `native_id`. |
