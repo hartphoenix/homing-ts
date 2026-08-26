@@ -11,7 +11,7 @@ Bun/Hono/React application.
 ## Initial browser product
 
 Included: sessions, invitation-bound registration, projects, prompt/criteria, leads, interest,
-comments, trash/restore, memberships, profile/pause, agent setup/link approval, manual tokens, and
+comments, trash/restore, memberships, profile, agent setup/link approval, manual tokens, and
 source-plan repair guidance.
 
 Deferred: saved prompts UI, general password-reset UI, public registration, and admin UI.
@@ -49,7 +49,7 @@ Tier 1. Performance profiling begins only after the functional release candidate
 
 ## Contract decisions
 
-- The unchanged `agentkit/package/scripts/homing.py` client is the primary wire-contract consumer.
+- The versioned `agentkit/package/scripts/homing.py` client is the primary wire-contract consumer.
 - Browser administration and all account/project administration are session-only.
 - Every active member role may edit project content. Owner status governs membership administration,
   project trash, comment moderation, and the final-owner invariant.
@@ -91,8 +91,7 @@ Tier 1. Performance profiling begins only after the functional release candidate
 - `POST /api/v1/invitations/:token/register` is the only registration path. It atomically creates
   the invited user and profile, creates the project membership, and consumes the invitation.
   Existing exact-email recipients instead sign in and use `POST /api/v1/invitations/:token/accept`.
-- `GET/PATCH /api/v1/me/profile` owns private search context and `agent_paused_until`.
-  `/api/v1/me/token` and `/api/v1/me/projects` surface that pause to scheduled agents immediately.
+- `GET/PATCH /api/v1/me/profile` owns private search context.
 - Device pairing begins and polls without credentials. A browser session inspects and decides the
   six-character code through `/api/v1/auth/agent-links/:code`; the paired token is disclosed once
   and never receives `leads:destroy`.

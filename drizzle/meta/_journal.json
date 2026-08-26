@@ -43,6 +43,13 @@
       "when": 1787632060981,
       "tag": "0005_ambitious_slapstick",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1787715158485,
+      "tag": "0006_nebulous_amphibian",
+      "breakpoints": true
     }
   ]
 }

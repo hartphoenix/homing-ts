@@ -542,7 +542,7 @@ describe("public agent kit", () => {
   it("builds deterministic substituted bytes and serves the complete allowlist contract", async () => {
     const first = buildKitPackage("https://homing.test");
     const second = buildKitPackage("https://homing.test");
-    expect(first.version).toBe(3);
+    expect(first.version).toBe(4);
 
     const setup = readFileSync("agentkit/package/SKILL.md", "utf8");
     const phase2 = setup.indexOf("## Phase 2");
@@ -559,6 +559,11 @@ describe("public agent kit", () => {
     const installer = readFileSync("agentkit/package/scripts/install.py", "utf8");
     expect(installer).toContain("capabilities.json");
     expect(installer).toContain('"needs_setup": needs_setup');
+    expect(installer).not.toContain("paused in Homing");
+    expect(installer).not.toContain('payload.get("paused")');
+    expect(readFileSync("agentkit/package/scripts/homing.py", "utf8")).not.toContain(
+      "paused_until",
+    );
     expect(first.archiveBytes).toEqual(second.archiveBytes);
     expect(first.archiveBytes.byteLength).toBeLessThanOrEqual(256 * 1024);
     expect(

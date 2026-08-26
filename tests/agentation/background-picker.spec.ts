@@ -49,7 +49,6 @@ test("shows the interior treatment throughout the authenticated shell", async ({
           timezone: "America/New_York",
           bio: "",
           details: {},
-          agent_paused_until: null,
         },
       }),
     });

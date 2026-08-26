@@ -1866,9 +1866,7 @@ def render_uninstall(plan, manifest):
         lines += [shell_join(argv) for _label, argv in plan.pause_commands]
         lines += ["```", "", "Resume with:", "", "```sh"]
         lines += [shell_join(argv) for _label, argv in plan.resume_commands]
-        lines += ["```", "",
-                  "It can also be paused from %s/agent-setup/, which works even when this "
-                  "computer is off or someone else has it." % plan.origin, ""]
+        lines += ["```", ""]
     lines += ["## 2. Cut off its access (do this first if the computer is lost)", "",
               "Open %s/agent-setup/ and disconnect this worker's key. Only you can do that; "
               "this computer cannot cancel its own access, and removing the files below does "
@@ -2222,8 +2220,6 @@ def report_install(plan):
     say("Stopping it, in the order a person is most likely to want:")
     say("  pause here      %s --manifest %s --pause"
         % (os.path.basename(__file__), shell_quote(manifest_path_for(plan.state_dir))))
-    say("  pause in Homing %s/agent-setup/  - works even when this computer is off"
-        % plan.origin)
     say("  remove it       %s --manifest %s --uninstall"
         % (os.path.basename(__file__), shell_quote(manifest_path_for(plan.state_dir))))
     say("  revoke the key  %s/agent-setup/  - only the person can do this, and it is the"
@@ -2254,9 +2250,6 @@ def do_pause(manifest, resume=False):
         run_command("resume the schedule" if resume else "pause the schedule", argv,
                     required=False)
     say("The daily check is %s." % ("running again" if resume else "paused"))
-    if not resume:
-        say("It can also be paused from Homing itself, which works even when this computer "
-            "is off.")
     return EXIT_OK
 
 
@@ -2409,7 +2402,6 @@ called directly as black-box scripts rather than ingested into your context wind
 | # | Cause | Do this |
 |---|---|---|
 | 0 | ran, or "already running", or "deferred" | report from `last-run.json` |
-| 3 | paused in Homing | say it is paused; do not restart it |
 | 4 | 401, key not accepted | stop; do not retry, loop, or prompt; say once "Homing needs you to reconnect" |
 | 5 | 403, permission | do not rotate anything, do not re-prompt; report the refused action |
 | 6 | 409 stale_write, a person is editing | keep the person's value; never force the other through |
@@ -2948,8 +2940,8 @@ bin/sources.py. Its whole job is sequencing and bounded file glue, so the chain
 untrusted-page -> credential -> network is broken at a file boundary.
 
 Exit codes are the ones homing-check/SKILL.md documents:
-    0 ok, deferred, or already running   3 paused in Homing        4 401
-    5 403                                6 409 stale_write         7 409 lead_trashed
+    0 ok, deferred, or already running   4 401                     5 403
+    6 409 stale_write                    7 409 lead_trashed
     8 410 cursor expired                 9 429                    10 5xx / unavailable
    70 a local bound or a bad file       78 no key stored          142 timed out
 """
@@ -2963,7 +2955,7 @@ import tempfile
 import time
 import uuid
 
-OK, PAUSED, AUTH, FORBIDDEN, CONFLICT, TRASHED = 0, 3, 4, 5, 6, 7
+OK, AUTH, FORBIDDEN, CONFLICT, TRASHED = 0, 4, 5, 6, 7
 CURSOR, RATE, UNAVAILABLE, LOCAL, NO_KEY = 8, 9, 10, 70, 78
 MAX_RECORD_LINES = 40
 MAX_PROMPT_REVISION = 2147483647
@@ -3180,8 +3172,6 @@ def phase_read(ctx):
     if code != OK:
         return fail(ctx, code, "could not read the searches from Homing")
     payload = payload or {}
-    if payload.get("paused"):
-        return fail(ctx, PAUSED, "paused in Homing", {"paused_until": payload.get("paused_until")})
     active_projects = [p for p in (payload.get("projects") or []) if isinstance(p, dict)]
     if not active_projects:
         return fail(ctx, OK, "no searches to run")

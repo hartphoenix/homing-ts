@@ -131,7 +131,6 @@ export type Profile = {
   timezone: string;
   bio: string;
   details: Record<string, unknown>;
-  agent_paused_until: string | null;
 };
 export type Me = { user: User; profile: Profile | null };
 export type Project = {

@@ -19,6 +19,7 @@
   --glass-shadow: 0 18px 50px rgb(25 35 31 / 9%);
   --shadow: var(--glass-shadow);
   --site-background-image: none;
+  --heading-font: Iowan Old Style, Baskerville, Georgia, serif;
 }
 
 * {
@@ -82,31 +83,29 @@ a:focus-visible,
 input:focus-visible,
 select:focus-visible,
 textarea:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--moss);
 }
 
 h1,
 h2,
+h3,
 p {
   margin-top: 0;
 }
 
 h1,
-h2 {
-  font-family:
-    Iowan Old Style,
-    Baskerville,
-    Georgia,
-    serif;
+h2,
+h3 {
+  font-family: var(--heading-font);
   font-weight: 500;
 }
 
 h1 {
   max-width: 15ch;
   margin-bottom: 0.75rem;
-  font-size: clamp(2.5rem, 6vw, 5.7rem);
+  font-size: clamp(2rem, 6vw, 2.5rem);
   letter-spacing: -0.045em;
-  line-height: 0.94;
+  line-height: 1;
 }
 
 h2 {
@@ -127,11 +126,16 @@ label {
   font-weight: 600;
 }
 
+form {
+  display: grid;
+  gap: 1rem;
+}
+
 input,
 select,
 textarea {
   width: 100%;
-  border: 1px solid var(--glass-border);
+  border: 1px solid var(--line);
   border-radius: 0.6rem;
   background: var(--glass-field);
   padding: 0.8rem 0.9rem;
@@ -144,11 +148,7 @@ textarea {
 }
 
 .wordmark {
-  font-family:
-    Iowan Old Style,
-    Baskerville,
-    Georgia,
-    serif;
+  font-family: var(--heading-font);
   font-size: 1.7rem;
   font-weight: 500;
   letter-spacing: -0.04em;
@@ -180,6 +180,7 @@ textarea {
 
 .button {
   display: inline-flex;
+  width: fit-content;
   min-height: 2.75rem;
   align-items: center;
   justify-content: center;
@@ -192,12 +193,6 @@ textarea {
   color: var(--ink);
   font-size: 0.86rem;
   font-weight: 600;
-}
-
-.button.primary {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: var(--ink);
 }
 
 .button:hover:not(:disabled) {
@@ -255,8 +250,6 @@ textarea {
 }
 
 .login-form {
-  display: grid;
-  gap: 1.2rem;
   max-width: 28rem;
   padding: clamp(1.6rem, 4vw, 3rem);
   backdrop-filter: blur(22px) saturate(125%);
@@ -290,23 +283,23 @@ textarea {
   backdrop-filter: blur(22px) saturate(125%);
 }
 
-.topbar nav {
+.topbar .desktop-nav {
   display: flex;
   gap: 1.75rem;
 }
 
-.topbar nav a {
+.topbar .desktop-nav a {
   position: relative;
   color: var(--muted);
   font-size: 0.82rem;
   font-weight: 600;
 }
 
-.topbar nav a.active {
+.topbar .desktop-nav a.active {
   color: var(--ink);
 }
 
-.topbar nav a.active::after {
+.topbar .desktop-nav a.active::after {
   position: absolute;
   right: 0;
   bottom: -0.65rem;
@@ -333,11 +326,7 @@ textarea {
 
 .account-menu .profile-link:hover,
 .account-menu .plain-button:hover {
-  color: var(--accent);
-}
-
-.topbar .plain-button {
-  justify-self: end;
+  color: var(--moss);
 }
 
 .mobile-menu {
@@ -348,6 +337,8 @@ textarea {
 
 .mobile-menu-trigger {
   display: inline-grid;
+  min-width: 2.75rem;
+  min-height: 2.75rem;
   place-items: center;
   border: 0;
   background: transparent;
@@ -421,43 +412,14 @@ textarea {
 }
 
 .page-heading > h1 {
-  margin: 0;
-  font-size: clamp(2rem, 6vw, 2.5rem);
-}
-
-.page:not(.project-page) > .page-heading > h1 {
-  width: min(100%, 609px);
-  max-width: 609px;
-  font-size: 33.7px;
-}
-
-.page-heading.split {
-  display: flex;
+  width: 100%;
   max-width: none;
-  align-items: center;
-  justify-content: space-between;
-  gap: 2rem;
+  margin: 0;
 }
 
 .create-project {
-  display: grid;
-  gap: 1rem;
   max-width: 48rem;
   margin: 1.5rem 0 0;
-}
-
-.page > section.panel,
-.page > form.panel,
-.settings-stack {
-  width: min(100%, 700px);
-  max-width: 700px;
-  margin-right: auto;
-  margin-left: auto;
-}
-
-.create-project .button,
-.editor .button {
-  justify-self: start;
 }
 
 .project-grid {
@@ -497,7 +459,7 @@ textarea {
 }
 
 .project-card h2 {
-  margin-top: 3rem;
+  margin-top: 1.25rem;
 }
 
 .project-card > p {
@@ -693,6 +655,7 @@ textarea {
 
 .batch-bar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 1rem;
   margin: -0.35rem 0 1rem;
@@ -718,6 +681,7 @@ textarea {
 
 .lead-table {
   width: 100%;
+  min-width: 36rem;
   border-collapse: collapse;
   text-align: left;
 }
@@ -725,7 +689,7 @@ textarea {
 .lead-table th,
 .lead-table td {
   border-bottom: 1px solid var(--line);
-  padding: 1rem 0.8rem;
+  padding: 1rem clamp(0.5rem, 2vw, 0.8rem);
   vertical-align: middle;
 }
 
@@ -763,7 +727,7 @@ textarea {
 }
 
 .lead-table td:nth-child(2) {
-  min-width: 18rem;
+  width: 42%;
 }
 
 .lead-table td:nth-child(2) a {
@@ -805,8 +769,7 @@ textarea {
   opacity: 0.6;
 }
 
-.lead-card-top,
-.detail-heading {
+.lead-card-top {
   display: flex;
   align-items: start;
   justify-content: space-between;
@@ -832,7 +795,7 @@ textarea {
 }
 
 .lead-card h2 {
-  margin-top: 2rem;
+  margin-top: 1.25rem;
 }
 
 .lead-card p {
@@ -840,16 +803,16 @@ textarea {
   font-size: 0.86rem;
 }
 
+.lead-card-engagement {
+  display: inline-flex;
+  gap: 0.45rem;
+}
+
 .clamp {
   display: -webkit-box;
   overflow: hidden;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
-}
-
-.editor {
-  display: grid;
-  gap: 1.25rem;
 }
 
 .brief-stack {
@@ -871,7 +834,6 @@ textarea {
 }
 
 .member-remove {
-  min-height: 2.2rem;
   padding: 0.4rem 0.8rem;
 }
 
@@ -905,7 +867,7 @@ textarea {
 .agent-pairing-entry,
 .pairing-code-form {
   display: grid;
-  gap: 0.9rem;
+  gap: 1rem;
   min-width: 0;
 }
 
@@ -927,12 +889,15 @@ textarea {
 }
 
 .pairing-codes summary {
+  display: list-item;
   width: fit-content;
+  min-height: 2.75rem;
+  padding: 0.35rem 0;
   cursor: pointer;
   color: var(--ink);
-  font-family: Georgia, "Times New Roman", serif;
+  font-family: var(--heading-font);
   font-size: 1.25rem;
-  font-weight: 700;
+  font-weight: 500;
 }
 
 .pairing-codes-content {
@@ -975,8 +940,8 @@ textarea {
 
 .source-plan-banner {
   display: grid;
-  width: min(76rem, 88vw);
-  gap: 0.85rem;
+  width: min(700px, 92vw);
+  gap: 1rem;
   margin: 1.5rem auto 0;
   border-color: #c8d9bd;
   background: #f1f6ef;
@@ -1010,28 +975,6 @@ textarea {
   margin-top: 1rem;
 }
 
-.pause-controls {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  align-items: center;
-  gap: 0.8rem;
-  border-bottom: 1px solid var(--line);
-  margin-bottom: 1.4rem;
-  padding-bottom: 1.2rem;
-}
-
-.pause-controls h2 {
-  margin: 0;
-}
-
-.pause-controls p {
-  margin: 0.35rem 0 0;
-}
-
-.pause-controls .message {
-  grid-column: 1 / -1;
-}
-
 .avatar {
   display: inline-grid;
   width: 2.2rem;
@@ -1041,11 +984,7 @@ textarea {
   border-radius: 50%;
   background: var(--ink);
   color: #fff;
-  font-family:
-    Iowan Old Style,
-    Baskerville,
-    Georgia,
-    serif;
+  font-family: var(--heading-font);
 }
 
 .detail-heading {
@@ -1071,13 +1010,9 @@ textarea {
 .detail-title-input {
   grid-column: 1 / -1;
   margin-top: 0;
-  font-family:
-    Iowan Old Style,
-    Baskerville,
-    Georgia,
-    serif;
-  font-size: clamp(1.8rem, 3.75vw, 3.45rem);
-  font-weight: 700;
+  font-family: var(--heading-font);
+  font-size: clamp(2rem, 6vw, 2.5rem);
+  font-weight: 500;
 }
 
 .detail-heading h1 {
@@ -1085,18 +1020,14 @@ textarea {
   max-width: none;
   margin-top: 0;
   margin-bottom: 0;
-  font-size: clamp(1.8rem, 3.75vw, 3.45rem);
+  font-size: clamp(2rem, 6vw, 2.5rem);
 }
 
 .detail-price {
   display: block;
   grid-column: 1;
   margin-top: -0.5rem;
-  font-family:
-    Iowan Old Style,
-    Baskerville,
-    Georgia,
-    serif;
+  font-family: var(--heading-font);
   font-size: 1.8rem;
 }
 
@@ -1105,7 +1036,7 @@ textarea {
   grid-column: 1;
   align-items: baseline;
   gap: 0.8rem;
-  margin-top: -0.5rem;
+  margin-top: 0;
 }
 
 .detail-market-data .detail-price {
@@ -1178,8 +1109,8 @@ textarea {
 
 .icon-button {
   display: inline-grid;
-  width: 2.5rem;
-  height: 2.5rem;
+  width: 2.75rem;
+  height: 2.75rem;
   place-items: center;
   border: 1px solid var(--line);
   border-radius: 50%;
@@ -1297,7 +1228,7 @@ textarea {
   display: flex;
   align-items: center;
   gap: 0.6rem;
-  margin-bottom: 1.5rem;
+  margin: 1.5rem 0 0;
   color: var(--muted);
   font-size: 0.8rem;
 }
@@ -1364,8 +1295,7 @@ textarea {
 
 .agent-key-table {
   width: 100%;
-  min-width: 0;
-  table-layout: fixed;
+  min-width: 38rem;
   border-collapse: collapse;
   text-align: left;
 }
@@ -1373,9 +1303,8 @@ textarea {
 .agent-key-table th,
 .agent-key-table td {
   border-bottom: 1px solid var(--line);
-  padding: 0.85rem 1rem 0.85rem 0;
+  padding: 0.85rem clamp(0.6rem, 2vw, 1rem) 0.85rem 0;
   vertical-align: top;
-  overflow-wrap: anywhere;
 }
 
 .agent-key-table thead th {
@@ -1415,7 +1344,7 @@ textarea {
 }
 
 .disconnect-key {
-  color: var(--accent);
+  color: var(--moss);
   font-weight: 600;
 }
 
@@ -1432,7 +1361,7 @@ textarea {
 
 .additional-agent-setup h3 {
   margin: 0;
-  font-size: 1rem;
+  font-size: 1.25rem;
 }
 
 .additional-agent-setup .setup-prompt {
@@ -1444,15 +1373,10 @@ textarea {
   gap: 1rem;
 }
 
-.settings-form {
-  display: grid;
-  gap: 1.25rem;
-}
-
 .profile-fields {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 1.2rem;
+  gap: 1rem;
 }
 
 .profile-field-wide {
@@ -1482,7 +1406,7 @@ textarea {
 }
 
 .settings-section-heading a {
-  color: var(--accent);
+  color: var(--moss);
   font-size: 0.82rem;
   font-weight: 600;
 }
@@ -1594,7 +1518,7 @@ textarea {
     grid-template-columns: auto 1fr;
   }
 
-  .topbar nav {
+  .topbar .desktop-nav {
     justify-self: end;
   }
 
@@ -1606,24 +1530,11 @@ textarea {
   .lead-list {
     grid-template-columns: 1fr;
   }
-
-  .detail-heading {
-    width: 100%;
-  }
-
-  .detail-grid {
-    width: 100%;
-    grid-template-columns: 1fr;
-  }
 }
 
 @media (max-width: 580px) {
   .login-page {
     padding: 1.25rem;
-  }
-
-  .login-intro h1 {
-    font-size: 3.25rem;
   }
 
   .topbar {
@@ -1646,18 +1557,22 @@ textarea {
   }
 
   .page {
-    width: min(92vw, 76rem);
     padding-top: 3rem;
   }
 
-  .page-heading.split,
   .detail-heading {
-    display: grid;
+    grid-template-columns: 1fr;
     align-items: start;
   }
 
-  .page-heading.split .button {
+  .detail-heading > .button {
+    grid-column: 1;
     justify-self: start;
+    margin-top: 0;
+  }
+
+  .detail-market-data {
+    flex-wrap: wrap;
   }
 
   .lead-tools {
@@ -1710,10 +1625,6 @@ textarea {
   .lead-pagination {
     align-items: stretch;
     flex-direction: column;
-  }
-
-  .detail-price {
-    justify-items: start;
   }
 }
 

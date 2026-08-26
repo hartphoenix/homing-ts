@@ -70,7 +70,6 @@ export const profiles = pgTable("profiles", {
   timezone: varchar("timezone", { length: 64 }).notNull().default("UTC"),
   bio: text("bio").notNull().default(""),
   personalDetails: jsonb("personal_details").$type<Record<string, unknown>>().notNull().default({}),
-  agentPausedUntil: timestamp("agent_paused_until", { withTimezone: true }),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

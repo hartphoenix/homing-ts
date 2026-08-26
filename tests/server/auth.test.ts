@@ -76,7 +76,6 @@ class FakeRepository implements AuthRepository {
     timezone: "UTC",
     bio: "",
     personalDetails: {},
-    agentPausedUntil: null,
   };
   sessions = new Map<string, SessionRecord>();
   tokens = new Map<string, AgentTokenRecord>();
@@ -510,7 +509,6 @@ describe("auth router", () => {
     expect(repo.invitationMembershipCreated).toBe(true);
     expect(repo.invitationAccepted).toBe(true);
     const authenticatedCookie = registered.headers.get("set-cookie")?.split(";", 1)[0] ?? "";
-    const pausedUntil = "2026-08-21T18:00:00.000Z";
     const profile = await router.request("https://example.test/me/profile", {
       method: "PATCH",
       headers: {
@@ -519,14 +517,14 @@ describe("auth router", () => {
         "X-CSRF-Token": registration.csrf_token,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ display_name: "New name", agent_paused_until: pausedUntil }),
+      body: JSON.stringify({ display_name: "New name" }),
     });
     expect(profile.status).toBe(200);
-    expect((await profile.json()).agent_paused_until).toBe(pausedUntil);
+    expect(await profile.json()).not.toHaveProperty("agent_paused_until");
     const introspection = await router.request("https://example.test/me/token", {
       headers: { Cookie: authenticatedCookie },
     });
-    expect((await introspection.json()).agent_paused_until).toBe(pausedUntil);
+    expect(await introspection.json()).not.toHaveProperty("agent_paused_until");
     const replay = await router.request("https://example.test/invitations/invite-secret/accept", {
       method: "POST",
       headers: {

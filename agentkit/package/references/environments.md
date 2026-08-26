@@ -601,8 +601,8 @@ What holds the run at rung 0 is not the OS, and the install report says so in th
 * the install writes only into `<config>`, `<state>` and `<logs>`; `bin/` is 0500, the plan and
   source list are 0400, and the pairing helper's `<config>/private/` is 0700 and named in no
   config, state or skill file;
-* pause is one command locally and one click in Homing, which works when the machine is off;
-  revocation is in Homing only, and holds even when the machine is out of the person's hands.
+* pause is one command locally; revocation is in Homing and holds even when the machine is out of
+  the person's hands.
 
 The write budget is still halved below rung 3, and feeds are still preferred over page
 fetching. Rung 0 changes who decides, not what the run is allowed to do.
@@ -640,10 +640,8 @@ Uninstall is driven by `<state>/install-manifest.json` and must be idempotent. O
 7. Hand the user the URL to disconnect the key in Homing — the agent cannot revoke its own
    token — and print exactly what was removed.
 
-Pause has two levels; name the second one to the user. Locally: `bootout` /
-`systemctl --user disable --now` / `Disable-ScheduledTask`. Server-side: Homing's own pause,
-which the runner honours by exiting immediately. Server-side pause is the one that still works
-when the user is not in front of the machine, so it is the one to name in the report.
+Pause is local: `bootout` / `systemctl --user disable --now` / `Disable-ScheduledTask`. If the
+machine is unavailable, the person can disconnect its key in Homing to stop its access.
 
 Write `<state>/UNINSTALL.md` with the literal commands for the environment you actually chose —
 not a menu of all five.

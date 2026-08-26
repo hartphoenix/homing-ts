@@ -230,15 +230,6 @@ export class PostgresCollaborationRepository implements CollaborationRepository 
     return rows.map(({ project }) => projectRecord(project));
   }
 
-  async getAgentPausedUntil(userId: number): Promise<Date | null> {
-    const [row] = await this.db
-      .select({ value: profiles.agentPausedUntil })
-      .from(profiles)
-      .where(eq(profiles.userId, userId))
-      .limit(1);
-    return row?.value ?? null;
-  }
-
   async getProject(projectId: string): Promise<ProjectRecord | null> {
     const [row] = await this.db.select().from(projects).where(eq(projects.id, projectId)).limit(1);
     return row ? projectRecord(row) : null;

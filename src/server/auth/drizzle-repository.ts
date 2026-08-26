@@ -55,7 +55,6 @@ function authProfile(row: ProfileRow): AuthProfile {
     timezone: row.timezone,
     bio: row.bio,
     personalDetails: row.personalDetails,
-    agentPausedUntil: row.agentPausedUntil,
   };
 }
 

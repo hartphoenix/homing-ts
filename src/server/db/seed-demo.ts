@@ -1,8 +1,16 @@
-import { eq, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 
 import { hashPassword } from "../auth/password";
 import { getDatabase } from "./client";
-import { leads, profiles, projects, users } from "./schema";
+import {
+  leadComments,
+  leadInterests,
+  leads,
+  profiles,
+  projectMemberships,
+  projects,
+  users,
+} from "./schema";
 
 const DEMO_LEADS = [
   {
@@ -139,6 +147,46 @@ const DEMO_LEADS = [
   },
 ] as const;
 
+const DEMO_ENGAGEMENT = [
+  {
+    interestedBy: [0, 1],
+    comments: [
+      { author: 0, body: "The light and laundry make this worth a closer look." },
+      { author: 1, body: "I can visit after work on Thursday." },
+      { author: 2, body: "The park access is excellent; checking the pet policy." },
+      { author: 0, body: "Added it to the shortlist." },
+    ],
+  },
+  {
+    interestedBy: [2],
+    comments: [{ author: 2, body: "Flexible lease terms could make this useful." }],
+  },
+  {
+    interestedBy: [0],
+    comments: [
+      { author: 0, body: "Utilities included keeps the total cost predictable." },
+      { author: 1, body: "Elevator access is a meaningful advantage." },
+    ],
+  },
+  { interestedBy: [], comments: [] },
+  {
+    interestedBy: [0, 1, 2],
+    comments: [
+      { author: 1, body: "Best accessibility match so far." },
+      { author: 2, body: "The train and park combination works well." },
+      { author: 0, body: "Let’s verify doorway measurements." },
+    ],
+  },
+  { interestedBy: [], comments: [] },
+  { interestedBy: [1], comments: [] },
+  {
+    interestedBy: [0, 2],
+    comments: [{ author: 0, body: "The balcony may justify the higher price." }],
+  },
+  { interestedBy: [], comments: [] },
+  { interestedBy: [], comments: [] },
+] as const;
+
 export async function seedDemoAccounts(): Promise<void> {
   // Keep development-only fixtures out of the production runtime image. The
   // production entrypoint rejects HOMING_DEMO_ACCOUNTS before this is called.
@@ -147,6 +195,8 @@ export async function seedDemoAccounts(): Promise<void> {
   const passwordHash = await hashPassword(DEMO_PASSWORD);
 
   await database.transaction(async (transaction) => {
+    const demoUserIds: number[] = [];
+
     for (const account of DEMO_ACCOUNTS) {
       const [existing] = await transaction
         .select({ id: users.id })
@@ -175,6 +225,7 @@ export async function seedDemoAccounts(): Promise<void> {
           )[0];
 
       if (!user) throw new Error(`Failed to seed demo account ${account.email}.`);
+      demoUserIds.push(user.id);
 
       await transaction
         .insert(profiles)
@@ -191,6 +242,13 @@ export async function seedDemoAccounts(): Promise<void> {
       .where(eq(projects.status, "active"));
 
     for (const project of activeProjects) {
+      for (const userId of demoUserIds) {
+        await transaction
+          .insert(projectMemberships)
+          .values({ projectId: project.id, userId, role: "editor" })
+          .onConflictDoNothing();
+      }
+
       for (const [index, lead] of DEMO_LEADS.entries()) {
         const sourceListingId = `homing-design-${String(index + 1).padStart(2, "0")}`;
         const [existing] = await transaction
@@ -200,7 +258,8 @@ export async function seedDemoAccounts(): Promise<void> {
             sql`${leads.projectId} = ${project.id} and ${leads.sourceListingId} = ${sourceListingId}`,
           )
           .limit(1);
-        if (existing) {
+        let leadId = existing?.id;
+        if (leadId) {
           await transaction
             .update(leads)
             .set({
@@ -210,44 +269,77 @@ export async function seedDemoAccounts(): Promise<void> {
                   ? null
                   : new Date(Date.now() - (index + 1) * 86_400_000).toISOString().slice(0, 10),
             })
-            .where(eq(leads.id, existing.id));
-          continue;
+            .where(eq(leads.id, leadId));
+        } else {
+          const status = "status" in lead ? lead.status : "active";
+          const timestamp = new Date(Date.now() - index * 3_600_000);
+          const listedAt =
+            index === 5 || index === 9
+              ? null
+              : new Date(Date.now() - (index + 1) * 86_400_000).toISOString().slice(0, 10);
+          const [created] = await transaction
+            .insert(leads)
+            .values({
+              projectId: project.id,
+              creatorId: project.creatorId,
+              source: lead.source,
+              sourceListingId,
+              canonicalUrl: `https://example.test/homing-design/${index + 1}`,
+              sourceUrl: `https://example.test/homing-design/${index + 1}`,
+              title: lead.title,
+              summary: lead.summary,
+              location: lead.location,
+              priceDisplay: lead.priceDisplay,
+              priceAmount: lead.priceAmount,
+              availability: lead.availability,
+              housingType: lead.housingType,
+              dateConfidence: lead.dateConfidence,
+              listedAt,
+              parkNotes: lead.parkNotes,
+              attributes: lead.attributes,
+              verificationNotes:
+                lead.dateConfidence === "strong"
+                  ? "Core listing details verified for design review."
+                  : "Fixture includes intentionally uncertain details for review states.",
+              status,
+              trashedById: status === "trashed" ? project.creatorId : null,
+              trashedAt: status === "trashed" ? timestamp : null,
+              createdAt: timestamp,
+              updatedAt: timestamp,
+            })
+            .returning({ id: leads.id });
+          leadId = created?.id;
         }
 
-        const status = "status" in lead ? lead.status : "active";
-        const timestamp = new Date(Date.now() - index * 3_600_000);
-        const listedAt =
-          index === 5 || index === 9
-            ? null
-            : new Date(Date.now() - (index + 1) * 86_400_000).toISOString().slice(0, 10);
-        await transaction.insert(leads).values({
-          projectId: project.id,
-          creatorId: project.creatorId,
-          source: lead.source,
-          sourceListingId,
-          canonicalUrl: `https://example.test/homing-design/${index + 1}`,
-          sourceUrl: `https://example.test/homing-design/${index + 1}`,
-          title: lead.title,
-          summary: lead.summary,
-          location: lead.location,
-          priceDisplay: lead.priceDisplay,
-          priceAmount: lead.priceAmount,
-          availability: lead.availability,
-          housingType: lead.housingType,
-          dateConfidence: lead.dateConfidence,
-          listedAt,
-          parkNotes: lead.parkNotes,
-          attributes: lead.attributes,
-          verificationNotes:
-            lead.dateConfidence === "strong"
-              ? "Core listing details verified for design review."
-              : "Fixture includes intentionally uncertain details for review states.",
-          status,
-          trashedById: status === "trashed" ? project.creatorId : null,
-          trashedAt: status === "trashed" ? timestamp : null,
-          createdAt: timestamp,
-          updatedAt: timestamp,
-        });
+        if (!leadId) throw new Error(`Failed to seed demo lead ${sourceListingId}.`);
+        const engagement = DEMO_ENGAGEMENT[index];
+        if (!engagement) throw new Error(`Missing demo engagement for ${sourceListingId}.`);
+
+        for (const accountIndex of engagement.interestedBy) {
+          const userId = demoUserIds[accountIndex];
+          if (!userId) continue;
+          await transaction.insert(leadInterests).values({ leadId, userId }).onConflictDoNothing();
+        }
+
+        for (const comment of engagement.comments) {
+          const authorId = demoUserIds[comment.author];
+          if (!authorId) continue;
+          const [existingComment] = await transaction
+            .select({ id: leadComments.id })
+            .from(leadComments)
+            .where(
+              and(
+                eq(leadComments.leadId, leadId),
+                eq(leadComments.authorId, authorId),
+                eq(leadComments.body, comment.body),
+                isNull(leadComments.deletedAt),
+              ),
+            )
+            .limit(1);
+          if (!existingComment) {
+            await transaction.insert(leadComments).values({ leadId, authorId, body: comment.body });
+          }
+        }
       }
     }
   });

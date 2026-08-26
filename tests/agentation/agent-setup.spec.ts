@@ -11,7 +11,6 @@ async function mockSignedInUser(page: Page) {
           timezone: "America/New_York",
           bio: "",
           details: {},
-          agent_paused_until: null,
         },
       }),
     });
@@ -109,6 +108,19 @@ test("lists and disconnects multiple active agent keys", async ({ page }) => {
 
   await page.goto("/agent-setup");
 
+  await expect(page.locator(".connection-summary")).toBeVisible();
+
+  const contentOrder = await page
+    .locator(".panel.prose")
+    .evaluate((panel) => Array.from(panel.children).map((child) => child.className));
+  expect(contentOrder.slice(0, 3)).toEqual([
+    "connection-summary",
+    "additional-agent-setup",
+    "pairing-codes",
+  ]);
+  await expect(page.getByText("Pairing codes", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Pair an existing agent" })).not.toBeVisible();
+
   const table = page.getByRole("table", { name: "Active agent access keys" });
   await expect(table.getByRole("columnheader")).toHaveText([
     "Connection",
@@ -122,6 +134,16 @@ test("lists and disconnects multiple active agent keys", async ({ page }) => {
   await expect(laptopRow).toContainText("Does not expire");
   await expect(laptopRow).toContainText("Never");
   await expect(page.getByRole("button", { name: "Copy setup prompt" })).toBeVisible();
+
+  await page.setViewportSize({ width: 375, height: 800 });
+  const tableOverflow = await page.locator(".agent-key-table-wrap").evaluate((wrapper) => ({
+    clientWidth: wrapper.clientWidth,
+    scrollWidth: wrapper.scrollWidth,
+    panelWidth: wrapper.closest(".panel")?.scrollWidth,
+    panelClientWidth: wrapper.closest(".panel")?.clientWidth,
+  }));
+  expect(tableOverflow.scrollWidth).toBeGreaterThan(tableOverflow.clientWidth);
+  expect(tableOverflow.panelWidth).toBe(tableOverflow.panelClientWidth);
 
   await table
     .getByRole("row", { name: /Studio agent/ })

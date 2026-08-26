@@ -864,13 +864,7 @@ def cmd_projects(args):
     response = request("GET", "/me/projects")
     body = response.json if isinstance(response.json, dict) else {}
     items = body.get("items") or []
-    paused_until = str(body.get("agent_paused_until") or "")
-    for project in items:  # tolerate a per-project echo of the same field
-        value = project.get("agent_paused_until") if isinstance(project, dict) else None
-        if value:
-            paused_until = str(value)
-    emit({"ok": True, "count": len(items), "paused": bool(paused_until),
-          "paused_until": paused_until, "projects": items})
+    emit({"ok": True, "count": len(items), "projects": items})
 
 
 def cmd_project(args):

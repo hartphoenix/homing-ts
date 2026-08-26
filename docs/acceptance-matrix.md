@@ -1,8 +1,8 @@
 # Functional acceptance matrix
 
-The compact replacement suite targets 79 behavioral scenarios. Parameterization may combine cases,
+The compact replacement suite targets 78 behavioral scenarios. Parameterization may combine cases,
 so test-file count is not normative. Every scenario maps to a security invariant, a browser journey,
-or the unchanged Python client. The legacy Django suite is evidence only.
+or the versioned Python client. The legacy Django suite is evidence only.
 
 ## Authentication and permissions — 12
 
@@ -83,34 +83,33 @@ or the unchanged Python client. The legacy Django suite is evidence only.
 62. Real pair-request/poll stores a 0600 token without leaking codes or credentials.
 63. Real client executes cursor reset, run/lease/upsert/comment/complete, and review repair paths.
 
-## Browser journeys — 8
+## Browser journeys — 7
 
 64. Login/logout and expired-session recovery work with keyboard and mobile layouts.
 65. Project/prompt/criteria editing reports conflicts without losing edits.
 66. Lead list/cards preserve URL state across search/filter/sort/view and pagination.
 67. Lead detail supports interest, comments, edit, trash, and restore by policy.
 68. Members and invitation administration expose final-owner errors clearly.
-69. Profile and server-side agent pause state update and rehydrate.
-70. Agent setup supports link approval/denial plus manual token creation and revocation.
-71. Source-plan review banner shows count, state, and server-authored copyable repair guidance.
+69. Agent setup supports link approval/denial plus manual token creation and revocation.
+70. Source-plan review banner shows count, state, and server-authored copyable repair guidance.
 
 ## Complete Django migration — 8
 
-72. Every Django user/profile and password hash migrates with stable IDs, normalized email,
+71. Every Django user/profile and password hash migrates with stable IDs, normalized email,
     active state, last login, profile state, and nonauthorizing legacy staff metadata; cutover
     rejects an active account whose password format the replacement cannot verify.
-73. Every project, membership role, invitation record, prompt revision, and saved prompt migrates
+72. Every project, membership role, invitation record, prompt revision, and saved prompt migrates
     with stable identifiers and timestamps.
-74. Completed/failed run history, leads including trash state, interests, threaded comments,
+73. Completed/failed run history, leads including trash state, interests, threaded comments,
     source-plan reviews, and audit events migrate without content loss.
-75. Browser sessions, auth throttles, agent tokens/links, idempotency rows, token references, and
+74. Browser sessions, auth throttles, agent tokens/links, idempotency rows, token references, and
     legacy change-feed rows do not cross the deployment trust boundary.
-76. Every run drops token references, claims, leases, and idempotency state; active runs additionally
+75. Every run drops token references, claims, leases, and idempotency state; active runs additionally
     become cancelled history, and pending invitations are revoked with tombstoned digests for
     explicit reissue.
-77. Source validation rejects missing references/profiles/owners, prompt gaps, comment cycles,
+76. Source validation rejects missing references/profiles/owners, prompt gaps, comment cycles,
     unsafe identifiers/bounds, and collisions under the replacement URL normalizer.
-78. Import requires an empty target, writes transactionally, proves exact canonical target-derived
+77. Import requires an empty target, writes transactionally, proves exact canonical target-derived
     counts/checksum before recording completion, and safely replays only the identical source.
-79. Independent post-import validation rereads frozen Django and TypeScript databases and rejects
+78. Independent post-import validation rereads frozen Django and TypeScript databases and rejects
     any count, checksum, migration-record, session, password-marker, or feed-epoch mismatch.

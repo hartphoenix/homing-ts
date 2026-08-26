@@ -158,7 +158,7 @@ test("conflicts preserve drafts and final-owner errors remain legible", async ({
   await expect(page.getByRole("alert")).toContainText("at least one owner");
 });
 
-test("profile pause, source repair, manual tokens, and session expiry rehydrate", async ({
+test("profile settings, source repair, manual tokens, and session expiry rehydrate", async ({
   page,
 }) => {
   if (!sql) throw new Error("PostgreSQL is required for this journey.");
@@ -174,10 +174,8 @@ test("profile pause, source repair, manual tokens, and session expiry rehydrate"
   await page.getByText("See what it says").click();
   await expect(page.getByLabel("Server-authored repair prompt")).toHaveValue(/\/agent\//);
   await expect(page.getByRole("button", { name: "Resolve review" })).toHaveCount(0);
-  await page.getByRole("button", { name: "Pause for 24 hours" }).click();
-  await expect(page.getByRole("heading", { name: "Search is paused" })).toBeVisible();
-
   await followShellLink(page, "Agent setup");
+  await page.getByText("Pairing codes", { exact: true }).click();
   await page.getByLabel("Key name").fill("Browser fallback key");
   await page.getByRole("button", { name: "Create access key" }).click();
   await expect(page.getByLabel("New access key")).not.toHaveValue("");
@@ -193,6 +191,7 @@ test("profile pause, source repair, manual tokens, and session expiry rehydrate"
 
   await sql`delete from sessions`;
   await followShellLink(page, "Settings");
-  await page.getByRole("button", { name: "Resume agents" }).click();
+  await page.getByLabel("Bio").fill("Session expiry check");
+  await page.getByRole("button", { name: "Save profile" }).click();
   await expect(page.getByRole("heading", { name: "Sign in again" })).toBeVisible();
 });

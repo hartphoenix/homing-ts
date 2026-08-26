@@ -43,7 +43,6 @@ called directly as black-box scripts rather than ingested into your context wind
 | # | Cause | Do this |
 |---|---|---|
 | 0 | ran, or "already running", or "deferred" | report from `last-run.json` |
-| 3 | paused in Homing | say it is paused; do not restart it |
 | 4 | 401, key not accepted | stop; do not retry, loop, or prompt; say once "Homing needs you to reconnect" |
 | 5 | 403, permission | do not rotate anything, do not re-prompt; report the refused action |
 | 6 | 409 stale_write, a person is editing | keep the person's value; never force the other through |
@@ -212,7 +211,7 @@ phases() {
   rm -rf "$WORK"; mkdir -p "$WORK" || return 70
   run_bounded 120 "$PY" "$BIN/cycle.py" --config "$CONFIG/config.json" drain  || return $?
   before_deadline read   || return $?
-  run_bounded 120 "$PY" "$BIN/cycle.py" --config "$CONFIG/config.json" read   || return $?  # 3 = paused
+  run_bounded 120 "$PY" "$BIN/cycle.py" --config "$CONFIG/config.json" read   || return $?
   before_deadline search || return $?
   run_bounded 420 "$PY" "$BIN/cycle.py" --config "$CONFIG/config.json" search || return $?
   before_deadline scoring || return $?
@@ -411,9 +410,8 @@ anything, because the project stays locked behind a live lease. Replays are idem
 then the record is marked for a person). `install.py --uninstall` closes every pending
 completion as well as any in-flight claim, so uninstalling never strands a lease.
 
-Pause and revocation both stop future work by this path: a paused project exits 3 at the read
-phase, and a revoked key turns every call — including a completion replay — into 401, which
-ends the cycle rather than looping.
+A revoked key turns every call — including a completion replay — into 401, which ends the cycle
+rather than looping.
 
 ## 9. Token budget, per run
 

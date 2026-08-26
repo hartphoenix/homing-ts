@@ -14,7 +14,6 @@ export type AuthProfile = {
   timezone: string;
   bio: string;
   personalDetails: Record<string, unknown>;
-  agentPausedUntil: Date | null;
 };
 
 export type SessionRecord = {

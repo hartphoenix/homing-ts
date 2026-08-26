@@ -384,8 +384,8 @@ second worker exists, offset the two so they never share a minute.
 ## Phase 10 — Report
 
 Five plain sentences, in this order: what the test run found; when it runs next and what has to be
-true for that; where the key lives and that it never appeared in the chat; how to pause or stop
-from Homing itself; that changing the frequency is one sentence away. No word from this list:
+true for that; where the key lives and that it never appeared in the chat; how to pause locally or
+disconnect it from Homing; that changing the frequency is one sentence away. No word from this list:
 token, revoke, runtime, secret store, environment variable, cron, scheduler, endpoint, API,
 bearer, scope, MCP, skill, install.
 
@@ -398,8 +398,7 @@ bearer, scope, MCP, skill, install.
 > Your access key is kept safely on this Mac. It never appeared in our chat and I can't read it
 > back to you.
 >
-> To pause or stop it, open Homing and press Pause or Disconnect — that works even when I'm not
-> running.
+> To pause it, tell me; to stop its access from anywhere, open Homing and press Disconnect.
 >
 > If you want it to check more or less often, just tell me.
 

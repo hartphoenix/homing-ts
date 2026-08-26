@@ -1086,7 +1086,7 @@ describePostgres("PostgreSQL concurrency invariants", () => {
     }
   }, 30_000);
 
-  it("runs the unchanged Python client through the production adapters", async () => {
+  it("runs the versioned Python client through the production adapters", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "homing-real-client-"));
     const password = "fixture password";
     await sqlClient`update users set password_hash = ${pbkdf2Fixture} where id = 1`;
@@ -1254,6 +1254,8 @@ describePostgres("PostgreSQL concurrency invariants", () => {
 
       const projects = await runClient("projects");
       expect(projects).toMatchObject({ count: 1, projects: [{ id: projectId }] });
+      expect(projects).not.toHaveProperty("paused");
+      expect(projects).not.toHaveProperty("paused_until");
       const cursorPath = join(workspace, "cursor");
       const initialChanges = await runClient(
         "changes",

@@ -577,11 +577,9 @@ export function createCollaborationRouter(dependencies: CollaborationDependencie
         ),
       ),
     );
-    const pausedUntil = await repository.getAgentPausedUntil(principal.userId);
     return json(context, 200, {
       items,
       projects: items,
-      agent_paused_until: pausedUntil?.toISOString() ?? null,
     });
   });
 

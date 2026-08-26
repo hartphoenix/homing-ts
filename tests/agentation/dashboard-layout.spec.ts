@@ -12,7 +12,6 @@ test("places the new-search action beneath the project list", async ({ page }) =
           timezone: "America/New_York",
           bio: "",
           details: {},
-          agent_paused_until: null,
         },
       }),
     });

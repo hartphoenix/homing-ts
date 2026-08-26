@@ -219,7 +219,7 @@ function LoginPage({
           />
         </label>
         <Message error={mutation.error} />
-        <button className="button primary" disabled={mutation.isPending} type="submit">
+        <button className="button" disabled={mutation.isPending} type="submit">
           {mutation.isPending ? "Signing in…" : "Sign in"}
         </button>
       </form>
@@ -287,7 +287,7 @@ function InvitationPage({ authenticated = false }: { authenticated?: boolean }) 
                 <p>Accept this invitation with the signed-in account.</p>
                 <Message error={accept.error} />
                 <button
-                  className="button primary"
+                  className="button"
                   disabled={accept.isPending}
                   onClick={() => accept.mutate()}
                   type="button"
@@ -351,7 +351,7 @@ function InvitationPage({ authenticated = false }: { authenticated?: boolean }) 
                     Use at least 12 characters. This invitation can only be used once.
                   </p>
                   <Message error={register.error} />
-                  <button className="button primary" disabled={register.isPending} type="submit">
+                  <button className="button" disabled={register.isPending} type="submit">
                     {register.isPending ? "Creating account…" : "Create account and join"}
                   </button>
                 </form>
@@ -420,7 +420,7 @@ function PairingPage() {
             <p className="quiet small">Code: {request.data.user_code}</p>
             <div className="pairing-actions">
               <button
-                className="button primary"
+                className="button"
                 disabled={decide.isPending}
                 onClick={() => decide.mutate("approve")}
                 type="button"
@@ -705,13 +705,13 @@ function Dashboard() {
             />
           </label>
           <Message error={create.error} />
-          <button className="button primary" disabled={create.isPending} type="submit">
+          <button className="button" disabled={create.isPending} type="submit">
             Create search
           </button>
         </form>
       )}
       <button
-        className="button primary dashboard-action"
+        className="button dashboard-action"
         onClick={() => setCreating((value) => !value)}
         type="button"
       >
@@ -803,14 +803,14 @@ function LeadIndex({ projectId }: { projectId: string }) {
     setSelected((current) =>
       current.includes(leadId) ? current.filter((id) => id !== leadId) : [...current, leadId],
     );
-  const setSort = (column: "price" | "source" | "days") => {
+  const setSort = (column: "price" | "days") => {
     const next = new URLSearchParams(searchParams);
     const current = searchParams.get("sort") ?? "";
     next.set("sort", current === `${column}_asc` ? `${column}_desc` : `${column}_asc`);
     next.delete("cursor");
     setSearchParams(next);
   };
-  const sortDirection = (column: "price" | "source" | "days") =>
+  const sortDirection = (column: "price" | "days") =>
     sort === `${column}_asc` ? "ascending" : sort === `${column}_desc` ? "descending" : "none";
   const allVisibleSelected = Boolean(
     leads.data?.items.length && leads.data.items.every((lead) => selected.includes(lead.id)),
@@ -898,17 +898,20 @@ function LeadIndex({ projectId }: { projectId: string }) {
               <p>{[lead.location, lead.availability].filter(Boolean).join(" · ")}</p>
               <p className="clamp">{lead.summary}</p>
               <footer>
-                <span>
+                <span className="lead-card-engagement">
                   <span aria-hidden="true">
                     {lead.interest_count ? `${lead.interest_count} ♥` : "♡"}
                   </span>
                   <span className="sr-only">{lead.interest_count ?? 0} interested</span>
+                  {Boolean(lead.comment_count) && (
+                    <>
+                      <span aria-hidden="true">|</span>
+                      <span>
+                        {lead.comment_count} {lead.comment_count === 1 ? "comment" : "comments"}
+                      </span>
+                    </>
+                  )}
                 </span>
-                {Boolean(lead.comment_count) && (
-                  <span>
-                    {lead.comment_count} {lead.comment_count === 1 ? "comment" : "comments"}
-                  </span>
-                )}
                 <label className="lead-select">
                   <span className="sr-only">Select {lead.title}</span>
                   <input
@@ -1445,7 +1448,7 @@ function Members({
               type="email"
               value={email}
             />
-            <button className="button primary" disabled={invite.isPending} type="submit">
+            <button className="button" disabled={invite.isPending} type="submit">
               {invite.isPending ? "Creating link…" : "Create invite link"}
             </button>
           </form>
@@ -1666,7 +1669,7 @@ function LeadPage() {
                 </>
               )}
             </div>
-            <a className="button primary" href={lead.data.url} target="_blank" rel="noreferrer">
+            <a className="button" href={lead.data.url} target="_blank" rel="noreferrer">
               Open listing ↗
             </a>
           </header>
@@ -1695,7 +1698,7 @@ function LeadPage() {
                     Cancel
                   </button>
                   <button
-                    className="button primary"
+                    className="button"
                     disabled={updateLead.isPending || !draftTitle.trim()}
                     onClick={() => updateLead.mutate()}
                     type="button"
@@ -1907,11 +1910,7 @@ function AgentSetupPage() {
   const promptControls = (
     <div className="setup-prompt">
       <div className="setup-prompt-controls">
-        <button
-          className={`button${showSetupPrompt ? " primary" : ""}`}
-          type="button"
-          onClick={copySetupPrompt}
-        >
+        <button className="button" type="button" onClick={copySetupPrompt}>
           Copy setup prompt
         </button>
         <button
@@ -1958,6 +1957,73 @@ function AgentSetupPage() {
           </p>
           {promptControls}
         </section>
+      )}
+      {hasActiveKey && (
+        <>
+          <section className="connection-summary">
+            <h2>
+              <span aria-hidden="true" className="connected-check">
+                ✓
+              </span>{" "}
+              Your agent is connected
+            </h2>
+            <Message error={disconnectToken.error} />
+            <div className="agent-key-table-wrap">
+              <table className="agent-key-table">
+                <caption className="sr-only">Active agent access keys</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Connection</th>
+                    <th scope="col">Activated</th>
+                    <th scope="col">Expires</th>
+                    <th scope="col">Last used</th>
+                    <th scope="col">
+                      <span className="sr-only">Options</span>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {displayedActiveTokens.map((token) => (
+                    <tr key={token.id}>
+                      <th scope="row">
+                        {token.name}
+                        {token.prefix && (
+                          <small className="agent-key-prefix">{token.prefix}…</small>
+                        )}
+                      </th>
+                      <td>
+                        <TokenDate value={token.created_at} empty="Not reported" />
+                      </td>
+                      <td>
+                        <TokenDate value={token.expires_at} empty="Does not expire" />
+                      </td>
+                      <td>
+                        <TokenDate
+                          value={token.last_used_at}
+                          empty={token.last_used_at === undefined ? "Not reported" : "Never"}
+                        />
+                      </td>
+                      <td>
+                        <button
+                          className="plain-button disconnect-key"
+                          disabled={previewActiveKey || disconnectToken.isPending}
+                          onClick={() => disconnectToken.mutate(token.id)}
+                          type="button"
+                        >
+                          Disconnect
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+          <div className="additional-agent-setup">
+            <h3>Set up another agent</h3>
+            {promptControls}
+          </div>
+        </>
       )}
       <details className="pairing-codes">
         <summary>Pairing codes</summary>
@@ -2049,6 +2115,10 @@ function AgentSetupPage() {
           </section>
         </div>
       </details>
+      <Message error={tokens.error} />
+      {tokens.isLoading && !previewActiveKey && (
+        <p className="quiet small">Checking existing access keys…</p>
+      )}
       {import.meta.env.DEV && (
         <label className="dev-preview-toggle">
           <input
@@ -2058,73 +2128,6 @@ function AgentSetupPage() {
           />
           Preview active agent key
         </label>
-      )}
-      <Message error={tokens.error} />
-      {tokens.isLoading && !previewActiveKey && (
-        <p className="quiet small">Checking existing access keys…</p>
-      )}
-      {hasActiveKey && (
-        <>
-          <h2>
-            <span aria-hidden="true" className="connected-check">
-              ✓
-            </span>{" "}
-            Your agent is connected
-          </h2>
-          <Message error={disconnectToken.error} />
-          <div className="agent-key-table-wrap">
-            <table className="agent-key-table">
-              <caption className="sr-only">Active agent access keys</caption>
-              <thead>
-                <tr>
-                  <th scope="col">Connection</th>
-                  <th scope="col">Activated</th>
-                  <th scope="col">Expires</th>
-                  <th scope="col">Last used</th>
-                  <th scope="col">
-                    <span className="sr-only">Options</span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {displayedActiveTokens.map((token) => (
-                  <tr key={token.id}>
-                    <th scope="row">
-                      {token.name}
-                      {token.prefix && <small className="agent-key-prefix">{token.prefix}…</small>}
-                    </th>
-                    <td>
-                      <TokenDate value={token.created_at} empty="Not reported" />
-                    </td>
-                    <td>
-                      <TokenDate value={token.expires_at} empty="Does not expire" />
-                    </td>
-                    <td>
-                      <TokenDate
-                        value={token.last_used_at}
-                        empty={token.last_used_at === undefined ? "Not reported" : "Never"}
-                      />
-                    </td>
-                    <td>
-                      <button
-                        className="plain-button disconnect-key"
-                        disabled={previewActiveKey || disconnectToken.isPending}
-                        onClick={() => disconnectToken.mutate(token.id)}
-                        type="button"
-                      >
-                        Disconnect
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <div className="additional-agent-setup">
-            <h3>Set up another agent</h3>
-            {promptControls}
-          </div>
-        </>
       )}
     </Placeholder>
   );
@@ -2142,9 +2145,6 @@ function ProfileSettingsForm({ profile }: { profile: Profile }) {
   );
   const [bio, setBio] = useState(profile.bio);
   const [saveStatus, setSaveStatus] = useState("");
-  const paused = Boolean(
-    profile.agent_paused_until && Date.parse(profile.agent_paused_until) > Date.now(),
-  );
   const updateCachedProfile = (updatedProfile: Profile) => {
     queryClient.setQueryData(["profile"], updatedProfile);
     queryClient.setQueryData<Me>(["me"], (current) =>
@@ -2169,21 +2169,6 @@ function ProfileSettingsForm({ profile }: { profile: Profile }) {
       setSaveStatus("Profile saved.");
     },
   });
-  const setPause = useMutation({
-    mutationFn: (until: string | null) =>
-      api<Profile>("/me/profile", {
-        method: "PATCH",
-        mutation: true,
-        body: JSON.stringify({ agent_paused_until: until }),
-      }),
-    onSuccess: (updatedProfile) => {
-      updateCachedProfile(updatedProfile);
-      setSaveStatus(
-        updatedProfile.agent_paused_until ? "Agent activity paused." : "Agent activity resumed.",
-      );
-    },
-  });
-
   const submit = (event: FormEvent) => {
     event.preventDefault();
     setSaveStatus("");
@@ -2196,43 +2181,6 @@ function ProfileSettingsForm({ profile }: { profile: Profile }) {
 
   return (
     <section aria-label="Profile" className="panel">
-      <div className="pause-controls">
-        <div>
-          <h2>{paused ? "Search is paused" : "Agent activity"}</h2>
-          <p className="quiet">
-            {paused
-              ? "Scheduled agents will remain paused until the time shown below."
-              : "Pause scheduled agent activity if you need a quiet period."}
-          </p>
-          {paused && (
-            <p className="quiet small">
-              Paused until <TokenDate value={profile.agent_paused_until} empty="later" />.
-            </p>
-          )}
-        </div>
-        {paused ? (
-          <button
-            className="button"
-            disabled={setPause.isPending}
-            onClick={() => setPause.mutate(null)}
-            type="button"
-          >
-            {setPause.isPending ? "Resuming…" : "Resume agents"}
-          </button>
-        ) : (
-          <button
-            className="button"
-            disabled={setPause.isPending}
-            onClick={() =>
-              setPause.mutate(new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString())
-            }
-            type="button"
-          >
-            {setPause.isPending ? "Pausing…" : "Pause for 24 hours"}
-          </button>
-        )}
-        <Message error={setPause.error} />
-      </div>
       <form className="settings-form" onSubmit={submit}>
         <div className="profile-fields">
           <label>
@@ -2272,7 +2220,7 @@ function ProfileSettingsForm({ profile }: { profile: Profile }) {
         </div>
         <Message error={saveProfile.error} />
         <div className="settings-form-actions">
-          <button className="button primary" disabled={saveProfile.isPending} type="submit">
+          <button className="button" disabled={saveProfile.isPending} type="submit">
             {saveProfile.isPending ? "Saving…" : "Save profile"}
           </button>
           <span className="copy-status" role="status">
