@@ -553,12 +553,68 @@ export class PostgresCollaborationRepository implements CollaborationRepository 
       requiredEvidence = currentConfig.requiredEvidence;
       const criteriaChanged =
         canonicalJsonSha256(criteria) !== canonicalJsonSha256(currentConfig.criteria);
+      let priorConfirmedBasis: Record<string, unknown> | undefined;
+      if (criteriaChanged && acquisitionBasis === undefined) {
+        const criteriaHash = canonicalJsonSha256(criteria);
+        const historicalSources = await this.db
+          .select({
+            criteria: promptRevisions.criteria,
+            acquisitionBasis: promptRevisions.acquisitionBasis,
+            adapter: sourceQueryRevisions.adapter,
+            queryIdentity: sourceQueryRevisions.queryIdentity,
+            status: sourceQueryRevisions.status,
+            promptRevision: promptRevisions.revision,
+            sourceRevision: sourceQueryRevisions.revision,
+            sourceId: sourceQueryRevisions.id,
+          })
+          .from(promptRevisions)
+          .innerJoin(
+            promptRevisionSourceQueries,
+            and(
+              eq(promptRevisionSourceQueries.promptRevisionId, promptRevisions.id),
+              eq(promptRevisionSourceQueries.projectId, projectId),
+            ),
+          )
+          .innerJoin(
+            sourceQueryRevisions,
+            and(
+              eq(sourceQueryRevisions.id, promptRevisionSourceQueries.sourceQueryRevisionId),
+              eq(sourceQueryRevisions.projectId, projectId),
+            ),
+          )
+          .where(
+            and(
+              eq(promptRevisions.projectId, projectId),
+              eq(promptRevisions.configStatus, "complete"),
+            ),
+          )
+          .orderBy(
+            desc(sql`case when ${sourceQueryRevisions.status} = 'ready' then 1 else 0 end`),
+            desc(promptRevisions.revision),
+            desc(sourceQueryRevisions.revision),
+            asc(sourceQueryRevisions.id),
+          );
+        const prior = historicalSources.find(
+          (candidate) =>
+            canonicalJsonSha256(candidate.criteria) === criteriaHash &&
+            currentQueries.some(
+              (source) =>
+                source.query.adapter === candidate.adapter &&
+                source.query.queryIdentity === candidate.queryIdentity,
+            ) &&
+            candidate.acquisitionBasis !== null,
+        );
+        priorConfirmedBasis = prior?.acquisitionBasis ?? undefined;
+      }
       // The current collaboration contract carries acquisition fields in criteria. When a
       // caller does not provide the newer explicit basis field, the changed criteria is the
       // new basis; retaining the old hash would make an immutable replacement indistinguishable
       // from the confirmed query and violate the query identity/basis uniqueness invariant.
       nextAcquisitionBasis =
-        acquisitionBasis ?? (criteriaChanged ? criteria : (currentConfig.acquisitionBasis ?? {}));
+        acquisitionBasis ??
+        (criteriaChanged
+          ? (priorConfirmedBasis ?? criteria)
+          : (currentConfig.acquisitionBasis ?? {}));
       const acquisitionChanged =
         acquisitionBasis === undefined
           ? criteriaChanged
