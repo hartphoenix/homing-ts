@@ -1,10 +1,10 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
-import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 import { drizzle } from "drizzle-orm/postgres-js";
@@ -1528,9 +1528,11 @@ describePostgres("PostgreSQL concurrency invariants", () => {
 
     try {
       const kit = buildKitPackage(origin);
-      const script = kit.files.get("homing.py");
-      expect(script).toBeTruthy();
-      await writeFile(scriptPath, script as Uint8Array);
+      for (const [path, bytes] of kit.files) {
+        const destination = join(workspace, path);
+        await mkdir(dirname(destination), { recursive: true });
+        await writeFile(destination, bytes);
+      }
       await chmod(scriptPath, 0o700);
 
       let ready = false;
