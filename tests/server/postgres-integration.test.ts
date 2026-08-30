@@ -17,6 +17,10 @@ import {
 } from "../../src/server/agent/postgres-repository";
 import { type AgentPrincipal, digest, RunService } from "../../src/server/agent/runs";
 import { canonicalJsonBytes, canonicalJsonSha256 } from "../../src/server/agent/v2/canonical";
+import { sourceQueryIdentity } from "../../src/server/agent/v2/identities";
+import { PostgresV2Repository } from "../../src/server/agent/v2/postgres-repository";
+import type { CreateRunInput, RunSnapshotProject } from "../../src/server/agent/v2/repository";
+import type { RequiredEvidenceKey } from "../../src/server/agent/v2/schemas";
 import { DrizzleAuthRepository } from "../../src/server/auth/drizzle-repository";
 import { verifyImportedPassword } from "../../src/server/auth/password";
 import { PostgresCollaborationRepository } from "../../src/server/collaboration/postgres-repository";
@@ -36,6 +40,7 @@ describePostgres("PostgreSQL concurrency invariants", () => {
   let runs: RunService;
   let collaboration: PostgresCollaborationRepository;
   let auth: DrizzleAuthRepository;
+  let v2: PostgresV2Repository;
 
   beforeAll(() => {
     sqlClient = postgres(databaseUrl as string, {
@@ -50,6 +55,9 @@ describePostgres("PostgreSQL concurrency invariants", () => {
       createPostgresProjectAuthorizer(sqlClient),
     );
     const database = drizzle(sqlClient, { schema });
+    v2 = new PostgresV2Repository(
+      database as ConstructorParameters<typeof PostgresV2Repository>[0],
+    );
     collaboration = new PostgresCollaborationRepository(
       database as ConstructorParameters<typeof PostgresCollaborationRepository>[0],
     );
@@ -102,6 +110,58 @@ describePostgres("PostgreSQL concurrency invariants", () => {
          now() + interval '30 days')
     `;
   });
+
+  async function createV2Snapshot(): Promise<RunSnapshotProject> {
+    const acquisitionBasis = { locations: ["Brooklyn"] };
+    const sourceQuery = { url: "https://www.zumper.com/homes/brooklyn" };
+    const acquisitionBasisHash = canonicalJsonSha256(acquisitionBasis);
+    const sourcePayload = {
+      version: 1,
+      adapter: "zumper-com" as const,
+      query: sourceQuery,
+      acquisition_basis_hash: acquisitionBasisHash,
+    };
+    const requiredEvidence: RequiredEvidenceKey[] = [
+      "location",
+      "price",
+      "availability",
+      "housing_type",
+    ];
+    const config = await v2.createConfigRevision({
+      userId: 1,
+      projectId,
+      expectedRevision: 1,
+      requiredEvidence,
+      acquisitionBasis,
+      sourceQueries: [
+        {
+          adapter: "zumper-com",
+          normalizedQuery: sourceQuery,
+          queryIdentity: sourceQueryIdentity(projectId, "zumper-com", sourceQuery),
+          acquisitionBasisHash,
+          canonicalBytes: canonicalJsonBytes(sourcePayload),
+          canonicalSha256: canonicalJsonSha256(sourcePayload),
+        },
+      ],
+    });
+    const queryId = config.sourceQueryIds[0];
+    if (!queryId) throw new Error("v2 config did not create a source query");
+    const query = await v2.getSourceQueryRevision(1, projectId, queryId);
+    if (!query) throw new Error("v2 source query disappeared after creation");
+    return {
+      projectId,
+      promptRevisionId: config.id,
+      promptRevision: config.revision,
+      canonicalSha256: config.canonicalSha256,
+      queries: [
+        {
+          sourceQueryRevisionId: query.id,
+          sourceQueryRevision: query.revision,
+          canonicalSha256: query.canonicalSha256,
+        },
+      ],
+    };
+  }
 
   afterAll(async () => {
     await sqlClient?.end({ timeout: 5 });
@@ -178,6 +238,97 @@ describePostgres("PostgreSQL concurrency invariants", () => {
        group by project.latest_change_sequence
     `;
     expect(sequenceState).toEqual({ latest: "5", total: "5", distinct_total: "5" });
+  });
+
+  it("replays concurrent v2 invocation creation without duplicate runs", async () => {
+    const snapshot = await createV2Snapshot();
+    const input: CreateRunInput = {
+      userId: 1,
+      tokenId: tokenOne,
+      invocationId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      agentLabel: "postgres/v2-integrity",
+      projects: [snapshot],
+    };
+    const results = await Promise.all(Array.from({ length: 8 }, () => v2.createRun(input)));
+    expect(new Set(results.map((result) => result.run.id)).size).toBe(1);
+    expect(results.filter((result) => !result.replayed)).toHaveLength(1);
+    expect(results.filter((result) => result.replayed)).toHaveLength(7);
+  });
+
+  it("returns a typed conflict when an invocation is replayed with another snapshot", async () => {
+    const snapshot = await createV2Snapshot();
+    const input: CreateRunInput = {
+      userId: 1,
+      tokenId: tokenOne,
+      invocationId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      agentLabel: "postgres/v2-integrity",
+      projects: [snapshot],
+    };
+    await v2.createRun(input);
+    const changedSnapshot: RunSnapshotProject = {
+      ...snapshot,
+      canonicalSha256: "f".repeat(64),
+    };
+    await expect(v2.createRun({ ...input, projects: [changedSnapshot] })).rejects.toMatchObject({
+      code: "conflict",
+      status: 409,
+    });
+  });
+
+  it("rejects duplicate snapshot entries as a typed conflict", async () => {
+    const snapshot = await createV2Snapshot();
+    const input: CreateRunInput = {
+      userId: 1,
+      tokenId: tokenOne,
+      invocationId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      agentLabel: "postgres/v2-integrity",
+      projects: [snapshot, snapshot],
+    };
+    await expect(v2.createRun(input)).rejects.toMatchObject({ code: "conflict", status: 409 });
+  });
+
+  it("requires submitted source queries to be configured and ready", async () => {
+    const snapshot = await createV2Snapshot();
+    const query = snapshot.queries[0];
+    if (!query) throw new Error("v2 snapshot has no source query");
+    const input: CreateRunInput = {
+      userId: 1,
+      tokenId: tokenOne,
+      invocationId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      agentLabel: "postgres/v2-integrity",
+      projects: [snapshot],
+    };
+    const foreignQuerySnapshot: RunSnapshotProject = {
+      ...snapshot,
+      queries: [
+        {
+          ...query,
+          sourceQueryRevisionId: "99999999-9999-4999-8999-999999999999",
+        },
+      ],
+    };
+    await expect(
+      v2.createRun({ ...input, projects: [foreignQuerySnapshot] }),
+    ).rejects.toMatchObject({
+      code: "conflict",
+      status: 409,
+    });
+
+    await sqlClient`
+      update source_query_revisions set status = 'needs_review'
+       where id = ${query.sourceQueryRevisionId}
+    `;
+    await expect(v2.createRun(input)).rejects.toMatchObject({ code: "conflict", status: 409 });
+  });
+
+  it("does not expose historical v2 configuration for an inactive project", async () => {
+    const snapshot = await createV2Snapshot();
+    const queryId = snapshot.queries[0]?.sourceQueryRevisionId;
+    if (!queryId || snapshot.promptRevisionId === null) throw new Error("incomplete v2 snapshot");
+    await collaboration.updateProject(projectId, { status: "trashed" });
+    expect(await v2.listProjects(1)).toEqual([]);
+    expect(await v2.getConfigRevision(1, projectId, snapshot.promptRevision)).toBeNull();
+    expect(await v2.getSourceQueryRevision(1, projectId, queryId)).toBeNull();
   });
 
   it("serializes final-owner changes and optimistic prompt revisions", async () => {

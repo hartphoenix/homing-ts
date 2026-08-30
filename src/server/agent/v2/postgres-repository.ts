@@ -180,6 +180,55 @@ async function mapRun(db: Database, row: Row): Promise<V2RunRecord> {
   };
 }
 
+async function runSnapshotMatches(
+  db: Database,
+  runId: string,
+  projects: RunSnapshotProject[],
+): Promise<boolean> {
+  const storedProjects = await db
+    .select()
+    .from(agentRunProjects)
+    .where(eq(agentRunProjects.runId, runId));
+  const storedQueries = await db
+    .select()
+    .from(agentRunQueries)
+    .where(eq(agentRunQueries.runId, runId));
+  if (storedProjects.length !== projects.length) return false;
+
+  const storedProjectsById = new Map(storedProjects.map((project) => [project.projectId, project]));
+  const storedQueriesByKey = new Map(
+    storedQueries.map((query) => [`${query.projectId}:${query.sourceQueryRevisionId}`, query]),
+  );
+  const expectedProjectIds = new Set<string>();
+  const expectedQueryKeys = new Set<string>();
+  for (const project of projects) {
+    if (!expectedProjectIds.add(project.projectId)) return false;
+    const storedProject = storedProjectsById.get(project.projectId);
+    if (
+      !storedProject ||
+      storedProject.promptRevision !== project.promptRevision ||
+      storedProject.canonicalSha256 !== project.canonicalSha256 ||
+      (project.promptRevisionId !== null &&
+        storedProject.promptRevisionId !== project.promptRevisionId)
+    ) {
+      return false;
+    }
+    for (const query of project.queries) {
+      const key = `${project.projectId}:${query.sourceQueryRevisionId}`;
+      if (!expectedQueryKeys.add(key)) return false;
+      const storedQuery = storedQueriesByKey.get(key);
+      if (
+        !storedQuery ||
+        storedQuery.sourceQueryRevision !== query.sourceQueryRevision ||
+        storedQuery.canonicalSha256 !== query.canonicalSha256
+      ) {
+        return false;
+      }
+    }
+  }
+  return storedQueries.length === expectedQueryKeys.size;
+}
+
 function conflict(message: string, fields: Record<string, unknown> = {}): never {
   throw new HomingError("conflict", message, 409, fields);
 }
@@ -191,6 +240,21 @@ function notFound(): never {
 function ensureHash(value: string): string {
   if (!/^[0-9a-f]{64}$/.test(value)) throw new Error("invalid canonical SHA-256 digest");
   return value;
+}
+
+function validateRunSnapshotShape(projects: RunSnapshotProject[]): void {
+  const projectIds = new Set<string>();
+  const queryIds = new Set<string>();
+  for (const project of projects) {
+    if (!projectIds.add(project.projectId)) {
+      conflict("A run may snapshot each project only once.");
+    }
+    for (const query of project.queries) {
+      if (!queryIds.add(query.sourceQueryRevisionId)) {
+        conflict("A run may snapshot each source-query revision only once.");
+      }
+    }
+  }
 }
 
 async function assertMembership(
@@ -245,7 +309,13 @@ export class PostgresV2Repository implements V2Repository {
       .from(projectMemberships)
       .innerJoin(projects, eq(projects.id, projectMemberships.projectId))
       .innerJoin(profiles, eq(profiles.userId, userId))
-      .leftJoin(promptRevisions, eq(promptRevisions.id, projects.currentConfigRevisionId))
+      .leftJoin(
+        promptRevisions,
+        and(
+          eq(promptRevisions.id, projects.currentConfigRevisionId),
+          eq(promptRevisions.projectId, projects.id),
+        ),
+      )
       .where(and(eq(projectMemberships.userId, userId), eq(projects.status, "active")))
       .orderBy(asc(projects.name), asc(projects.id));
     return Promise.all(
@@ -264,7 +334,12 @@ export class PostgresV2Repository implements V2Repository {
                 sourceQueryRevisions,
                 eq(sourceQueryRevisions.id, promptRevisionSourceQueries.sourceQueryRevisionId),
               )
-              .where(eq(promptRevisionSourceQueries.promptRevisionId, row.configRevisionId))
+              .where(
+                and(
+                  eq(promptRevisionSourceQueries.promptRevisionId, row.configRevisionId),
+                  eq(sourceQueryRevisions.projectId, row.id),
+                ),
+              )
               .orderBy(asc(promptRevisionSourceQueries.position))
           : [];
         const [latestRow] = await this.db
@@ -317,6 +392,7 @@ export class PostgresV2Repository implements V2Repository {
         requiredEvidence: promptRevisions.requiredEvidence,
       })
       .from(promptRevisions)
+      .innerJoin(projects, eq(projects.id, promptRevisions.projectId))
       .innerJoin(
         projectMemberships,
         and(
@@ -329,6 +405,7 @@ export class PostgresV2Repository implements V2Repository {
           eq(promptRevisions.projectId, projectId),
           eq(promptRevisions.revision, revision),
           eq(promptRevisions.configStatus, "complete"),
+          eq(projects.status, "active"),
         ),
       )
       .limit(1);
@@ -341,7 +418,12 @@ export class PostgresV2Repository implements V2Repository {
         sourceQueryRevisions,
         eq(sourceQueryRevisions.id, promptRevisionSourceQueries.sourceQueryRevisionId),
       )
-      .where(eq(promptRevisionSourceQueries.promptRevisionId, row.id))
+      .where(
+        and(
+          eq(promptRevisionSourceQueries.promptRevisionId, row.id),
+          eq(sourceQueryRevisions.projectId, row.projectId),
+        ),
+      )
       .orderBy(asc(promptRevisionSourceQueries.position));
     return {
       id: row.id,
@@ -372,6 +454,7 @@ export class PostgresV2Repository implements V2Repository {
         acquisitionBasisHash: sourceQueryRevisions.acquisitionBasisHash,
       })
       .from(sourceQueryRevisions)
+      .innerJoin(projects, eq(projects.id, sourceQueryRevisions.projectId))
       .innerJoin(
         projectMemberships,
         and(
@@ -380,7 +463,11 @@ export class PostgresV2Repository implements V2Repository {
         ),
       )
       .where(
-        and(eq(sourceQueryRevisions.id, queryId), eq(sourceQueryRevisions.projectId, projectId)),
+        and(
+          eq(sourceQueryRevisions.id, queryId),
+          eq(sourceQueryRevisions.projectId, projectId),
+          eq(projects.status, "active"),
+        ),
       )
       .limit(1);
     const row = rows[0];
@@ -577,25 +664,9 @@ export class PostgresV2Repository implements V2Repository {
 
   async createRun(input: CreateRunInput): Promise<{ run: V2RunRecord; replayed: boolean }> {
     return this.db.transaction(async (transaction) => {
-      const existingRows = await transaction
-        .select()
-        .from(agentRuns)
-        .where(eq(agentRuns.invocationId, input.invocationId))
-        .limit(1)
-        .for("update");
-      if (existingRows[0]) {
-        const existing = existingRows[0];
-        if (existing.userId !== input.userId || existing.tokenId !== input.tokenId) notFound();
-        if (existing.agentLabel !== input.agentLabel) {
-          conflict("The invocation ID was already used with a different request.");
-        }
-        return {
-          run: await mapRun(transaction as unknown as Database, existing as Row),
-          replayed: true,
-        };
-      }
       if (input.projects.length === 0) conflict("A run must snapshot at least one project.");
-      const [created] = await transaction
+      validateRunSnapshotShape(input.projects);
+      const insertedRows = await transaction
         .insert(agentRuns)
         .values({
           invocationId: input.invocationId,
@@ -603,8 +674,39 @@ export class PostgresV2Repository implements V2Repository {
           tokenId: input.tokenId,
           agentLabel: input.agentLabel,
         })
+        .onConflictDoNothing({ target: agentRuns.invocationId })
         .returning();
-      if (!created) throw new Error("agent run insert returned no row");
+      const created = insertedRows[0];
+      if (!created) {
+        // The unique insert waits for a concurrent creator. Once it returns without a
+        // row, locking the committed row makes replay deterministic and prevents a
+        // partially-created snapshot from being observed.
+        const existingRows = await transaction
+          .select()
+          .from(agentRuns)
+          .where(eq(agentRuns.invocationId, input.invocationId))
+          .limit(1)
+          .for("update");
+        const existing = existingRows[0];
+        if (!existing) conflict("The invocation could not be created; retry the request.");
+        if (existing.userId !== input.userId || existing.tokenId !== input.tokenId) notFound();
+        if (existing.agentLabel !== input.agentLabel) {
+          conflict("The invocation ID was already used with a different request.");
+        }
+        if (
+          !(await runSnapshotMatches(
+            transaction as unknown as Database,
+            String(existing.id),
+            input.projects,
+          ))
+        ) {
+          conflict("The invocation ID was already used with a different snapshot.");
+        }
+        return {
+          run: await mapRun(transaction as unknown as Database, existing as Row),
+          replayed: true,
+        };
+      }
       for (const project of input.projects) {
         await assertMembership(transaction as unknown as Database, input.userId, project.projectId);
         const [config] = await transaction
@@ -636,6 +738,28 @@ export class PostgresV2Repository implements V2Repository {
         ) {
           conflict("The run snapshot does not match an immutable configuration revision.");
         }
+        const configuredQueries = await transaction
+          .select({
+            id: sourceQueryRevisions.id,
+            revision: sourceQueryRevisions.revision,
+            sha256: sourceQueryRevisions.canonicalSha256,
+            status: sourceQueryRevisions.status,
+          })
+          .from(promptRevisionSourceQueries)
+          .innerJoin(
+            sourceQueryRevisions,
+            eq(sourceQueryRevisions.id, promptRevisionSourceQueries.sourceQueryRevisionId),
+          )
+          .where(
+            and(
+              eq(promptRevisionSourceQueries.promptRevisionId, config.id),
+              eq(sourceQueryRevisions.projectId, project.projectId),
+            ),
+          );
+        if (configuredQueries.length !== project.queries.length) {
+          conflict("The run snapshot must use exactly the configuration's source queries.");
+        }
+        const configuredById = new Map(configuredQueries.map((query) => [query.id, query]));
         await transaction.insert(agentRunProjects).values({
           runId: created.id,
           projectId: project.projectId,
@@ -649,6 +773,7 @@ export class PostgresV2Repository implements V2Repository {
             .select({
               revision: sourceQueryRevisions.revision,
               sha256: sourceQueryRevisions.canonicalSha256,
+              status: sourceQueryRevisions.status,
             })
             .from(sourceQueryRevisions)
             .where(
@@ -658,12 +783,18 @@ export class PostgresV2Repository implements V2Repository {
               ),
             )
             .limit(1);
+          const configured = configuredById.get(query.sourceQueryRevisionId);
           if (
             !source ||
+            !configured ||
+            source.status !== "ready" ||
+            configured.status !== "ready" ||
             source.revision !== query.sourceQueryRevision ||
-            source.sha256 !== query.canonicalSha256
+            source.sha256 !== query.canonicalSha256 ||
+            configured.revision !== query.sourceQueryRevision ||
+            configured.sha256 !== query.canonicalSha256
           ) {
-            conflict("The run snapshot does not match an immutable source-query revision.");
+            conflict("The run snapshot must use ready source queries from its configuration.");
           }
           await transaction.insert(agentRunQueries).values({
             runId: created.id,
