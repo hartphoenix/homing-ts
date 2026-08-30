@@ -1528,7 +1528,7 @@ describePostgres("PostgreSQL concurrency invariants", () => {
 
     try {
       const kit = buildKitPackage(origin);
-      const script = kit.files.get("scripts/homing.py");
+      const script = kit.files.get("homing.py");
       expect(script).toBeTruthy();
       await writeFile(scriptPath, script as Uint8Array);
       await chmod(scriptPath, 0o700);
