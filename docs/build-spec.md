@@ -1,6 +1,6 @@
 # Homing agent kit v2 build specification
 
-Status: v2 port baseline; implementation and production qualification pending.
+Status: v2 implementation candidate; native and database qualification pending.
 
 ## Contract succession
 
@@ -17,6 +17,19 @@ The current TypeScript product is the canonical server, package publisher, lifec
 production deployment target. The v2 port does not transplant Django, restore a Django deployment,
 or depend on v1 execution abstractions. The API route inventory and OpenAPI document are derived
 contract artifacts and must remain synchronized with this specification as implementation proceeds.
+
+## Verified production baseline
+
+The pre-port production baseline is healthy and remains the rollback reference for the TypeScript
+web image:
+
+- application commit: `e66cb23`;
+- image: `sha256:a34b7cbbd526e9928c448f935df48da2c5c58bbbfb7e0430f7cd413b9727f13a`;
+- health: verified healthy;
+- served package manifest digest: `a8ff9195f2c0719c5f24052010377a58d1853a948769e8d7ac2611672c88a8ba`.
+
+This baseline predates the v2 port. It is a server rollback reference, not a promise to restore a
+retired local v1 installation or a Django deployment.
 
 ## Product boundary
 

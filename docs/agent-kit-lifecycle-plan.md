@@ -2,8 +2,7 @@
 
 Date: 2026-08-29
 
-Status: normative lifecycle for the TypeScript port; implementation and native qualification
-pending.
+Status: normative lifecycle for the TypeScript port; native and database qualification pending.
 
 ## Lifecycle contract
 
@@ -86,5 +85,6 @@ agents, hosts, and uninduced crash or repair branches remain explicitly unverifi
 
 The lifecycle is complete only when no setup artifact remains after success, `homing-setup` is
 absent from skill inventories, exactly one worker and schedule remain, all state shown by the UI
-agrees with durable records, and the local v1 residue has been removed without touching the
-separate `com.homing.backup` job or its artifacts.
+agrees with durable records, and the local v1 residue has been removed. The former backup
+LaunchAgent is disabled and archived; it is not an active protected schedule and must not be
+recreated or represented as running by this lifecycle.

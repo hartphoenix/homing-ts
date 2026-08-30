@@ -31,6 +31,8 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   route("get", "/api/v1/me/profile", "browser-required", "either"),
   route("patch", "/api/v1/me/profile", "browser-required", "session", { body: true }),
   route("get", "/api/v1/me/token", "agent-required", "either"),
+  route("delete", "/api/v1/me/token", "agent-required", "either", { status: 204 }),
+  route("post", "/api/v1/me/token/finalize-setup", "agent-required", "either"),
   route("get", "/api/v1/auth/tokens", "browser-required", "session"),
   route("post", "/api/v1/auth/tokens", "browser-required", "session", {
     body: true,
@@ -44,6 +46,37 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     status: 201,
   }),
   route("post", "/api/v1/agent-link/token", "agent-required", "public", { body: true }),
+  route("get", "/api/v1/agent/projects", "agent-required", "either"),
+  route("post", "/api/v1/projects/{project}/config-revisions", "agent-required", "either", {
+    body: true,
+    status: 201,
+  }),
+  route(
+    "get",
+    "/api/v1/projects/{project}/config-revisions/{revision}",
+    "agent-required",
+    "either",
+  ),
+  route(
+    "get",
+    "/api/v1/projects/{project}/source-query-revisions/{query}",
+    "agent-required",
+    "either",
+  ),
+  route("post", "/api/v1/agent-runs", "agent-required", "either", {
+    body: true,
+    status: 201,
+  }),
+  route("patch", "/api/v1/agent-runs/{run}", "agent-required", "either", { body: true }),
+  route(
+    "post",
+    "/api/v1/projects/{project}/leads/create-or-return-existing",
+    "agent-required",
+    "either",
+    { body: true },
+  ),
+  route("put", "/api/v1/me/agent-pause", "browser-required", "session", { body: true }),
+  route("post", "/api/v1/auth/tokens/{connection}/source-refresh", "browser-required", "session"),
   route("get", "/api/v1/auth/agent-links/{code}", "browser-required", "session"),
   route("post", "/api/v1/auth/agent-links/{code}", "browser-required", "session", {
     body: true,
@@ -214,21 +247,31 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   route("head", "/agent-setup/SKILL.md", "compatibility", "public", { status: 301 }),
   route("get", "/agent/pkg/VERSION", "public", "public"),
   route("head", "/agent/pkg/VERSION", "public", "public"),
-  route("get", "/agent/pkg/SKILL.md", "public", "public"),
-  route("head", "/agent/pkg/SKILL.md", "public", "public"),
+  route("get", "/agent/pkg/SETUP.md", "public", "public"),
+  route("head", "/agent/pkg/SETUP.md", "public", "public"),
   route("get", "/agent/pkg/manifest.json", "public", "public"),
   route("head", "/agent/pkg/manifest.json", "public", "public"),
   route("get", "/agent/pkg/{archive}", "public", "public"),
   route("head", "/agent/pkg/{archive}", "public", "public"),
-  route("get", "/agent/pkg/references/{name}", "public", "public"),
-  route("head", "/agent/pkg/references/{name}", "public", "public"),
-  route("get", "/agent/pkg/scripts/{name}", "public", "public"),
-  route("head", "/agent/pkg/scripts/{name}", "public", "public"),
+  route("get", "/agent/pkg/adapters/{name}", "public", "public"),
+  route("head", "/agent/pkg/adapters/{name}", "public", "public"),
+  route("get", "/agent/pkg/homing-check/SKILL.md", "public", "public"),
+  route("head", "/agent/pkg/homing-check/SKILL.md", "public", "public"),
 ];
 
 function parameter(name: string) {
-  const integer = name === "userId" || name === "commentId";
-  const uuid = ["id", "projectId", "leadId", "runId", "reviewId"].includes(name);
+  const integer = name === "userId" || name === "commentId" || name === "revision";
+  const uuid = [
+    "id",
+    "projectId",
+    "leadId",
+    "runId",
+    "reviewId",
+    "project",
+    "query",
+    "run",
+    "connection",
+  ].includes(name);
   return {
     in: "path",
     name,
@@ -257,7 +300,8 @@ function successContent(routeDefinition: RouteDefinition) {
     schema = { type: "string" };
   } else if (
     routeDefinition.path === "/agent/pkg/VERSION" ||
-    routeDefinition.path.includes("/scripts/")
+    routeDefinition.path.includes("/scripts/") ||
+    routeDefinition.path.includes("/adapters/")
   ) {
     mediaType = "text/plain";
     schema = { type: "string" };

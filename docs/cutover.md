@@ -9,6 +9,10 @@ or run preapproved staging commands but never handle host secrets. Keep the curr
 schema checksum, package digest, backup artifact, and exact rollback commands in the release
 record before changing production.
 
+The recorded pre-port baseline is commit `e66cb23`, image
+`sha256:a34b7cbbd526e9928c448f935df48da2c5c58bbbfb7e0430f7cd413b9727f13a`, verified healthy, with
+manifest digest `a8ff9195f2c0719c5f24052010377a58d1853a948769e8d7ac2611672c88a8ba`.
+
 ## Preconditions
 
 Run the repository preflight against the production environment file. It must validate the bare
@@ -24,9 +28,10 @@ isolated restore. The rehearsal must also exercise web rollback to the prior Typ
 ## Controlled release
 
 1. Freeze the release commit, current image digest, schema checksum, served package digest, backup
-   status, disk space, and rollback commands. Confirm the failed local v1 installation has no job,
-   runtime, configuration, state, skill, log, installer backup, or credential metadata. Preserve
-   the separate `com.homing.backup` job and its logs.
+   artifact status, disk space, and rollback commands. Confirm the failed local v1 installation has
+   no job, runtime, configuration, state, skill, log, installer backup, or credential metadata. The
+   former `com.homing.backup` LaunchAgent is disabled and archived; do not represent it as running
+   or recreate it as part of this release.
 2. Build or pull the immutable v2 image and run preflight. Take and independently verify a fresh
    encrypted PostgreSQL backup before migration.
 3. Start only `db`, `provision`, `migrate`, and `harden`. Require each one-shot to exit zero and
@@ -39,17 +44,18 @@ isolated restore. The rehearsal must also exercise web rollback to the prior Typ
    document. In a fresh session, pause the account before installing, then qualify setup cleanup,
    Keychain storage, one schedule, paused self-test, resume, one manual run, delivery idempotency,
    and the factual pause/disconnect/removal controls.
-7. Enable the intended maintenance, backup, and search schedules only after those checks pass.
-   Verify exactly one named search job and one backup job, then record the canary result and any
-   explicitly unverified native branches.
+7. Enable the intended maintenance and search schedules only after those checks pass. Verify exactly
+   one named search job. The former backup LaunchAgent remains disabled and archived; use the
+   documented manual backup command when a fresh release artifact is required, then record the
+   canary result and any explicitly unverified native branches.
 
 ## Rollback
 
 For ordinary release, canary, or web failure, pause or remove the local v2 installation, restore
 the prior immutable TypeScript image digest in the environment, and force-recreate only `web`.
-Verify health, public smoke, browser behavior, and the existing backup job. Keep the new image and
-release backup for the rollback window. Do not recreate Caddy or PostgreSQL unless the failure
-requires it.
+Verify health, public smoke, and browser behavior. Keep the new image and release backup for the
+rollback window. Do not recreate Caddy or PostgreSQL unless the failure requires it, and do not
+recreate the disabled backup LaunchAgent.
 
 Use database restore only for database corruption or an explicitly approved recovery exercise.
 Restore into an isolated target first, verify the encrypted archive and v2 constraints, then run

@@ -4,6 +4,10 @@ This matrix is the release gate for the v2 TypeScript port. Parameterization may
 scenario count is not normative. The reviewed v2 contract and this matrix supersede v1 execution
 behavior. Existing product journeys remain gates only where they intersect the port.
 
+The former `com.homing.backup` LaunchAgent is disabled and archived. It is not an active release
+gate or protected schedule; backup qualification uses the documented manual command and an
+explicitly recorded artifact.
+
 ## Contract and canonical state
 
 1. The normative order names the reviewed v2 contract first; v1 is rollback evidence only.

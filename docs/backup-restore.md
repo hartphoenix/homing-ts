@@ -51,6 +51,7 @@ create a fresh encrypted backup, restore it into isolation, and verify v2 constr
 canonical package bytes. Database restore is reserved for corruption or this explicit recovery
 exercise; ordinary release failure rolls back the prior TypeScript image.
 
-The backup job is separate from the local agent schedule. During local v2 removal or server
-rollback, preserve and verify the independently named `com.homing.backup` job and its artifacts;
-never delete shared application-support or log paths merely because they share a parent directory.
+The former `com.homing.backup` LaunchAgent was deliberately disabled and archived. It is not an
+active protected schedule and must not be described as running or recreated by local v2 removal or
+server rollback. Use `./docker/backup.sh` for an explicitly authorized manual backup. Never delete
+shared application-support or log paths merely because they share a parent directory.
