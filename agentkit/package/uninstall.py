@@ -88,17 +88,24 @@ def uninstall(paths=None, keychain=None, launch_agent=None, disconnector=None):
     key = manifest.get("keychain", {})
     if key.get("service") and key.get("account"):
         keychain.delete(key["service"], key["account"])
-    # rollback-v1 is intentionally not in this set.
     for root in (paths.runtime, paths.state, paths.logs, paths.skill):
         if root.exists():
             shutil.rmtree(str(root))
     if paths.manifest.exists():
         paths.manifest.unlink()
+    residue = []
     try:
-        paths.root.rmdir()  # Succeeds only when no rollback bundle or unknown content remains.
+        paths.root.rmdir()
     except OSError:
-        pass
-    return {"status": "removed", "disconnect": disconnect_status}
+        if paths.root.exists():
+            residue = sorted(
+                path.relative_to(paths.root).as_posix() for path in paths.root.rglob("*")
+            )
+    return {
+        "status": "removed" if not residue else "residue",
+        "disconnect": disconnect_status,
+        "residue": residue,
+    }
 
 
 def main(argv=None):

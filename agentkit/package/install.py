@@ -19,7 +19,6 @@ import subprocess
 import sys
 import tempfile
 import urllib.parse
-import uuid
 import zipfile
 
 LABEL = "com.hartphoenix.homing.search"
@@ -31,7 +30,6 @@ MAX_ARCHIVE_BYTES = 2 * 1024 * 1024
 MAX_MEMBER_BYTES = 512 * 1024
 MAX_TOTAL_BYTES = 2 * 1024 * 1024
 MAX_MEMBERS = 64
-MAX_ROLLBACK_FILES = 128
 MIN_PYTHON = (3, 9)
 MIN_CLAUDE = (2, 1, 247)
 REQUIRED_CLAUDE_FLAGS = (
@@ -178,7 +176,6 @@ class InstallPaths:
         self.root = self.home / "Library/Application Support/Homing Agent"
         self.runtime = self.root / "runtime"
         self.state = self.root / "state"
-        self.rollback = self.root / "rollback-v1"
         self.logs = self.home / "Library/Logs/Homing Agent"
         self.plist = self.home / "Library/LaunchAgents" / (LABEL + ".plist")
         self.skill = self.home / ".agents/skills/homing-check"
@@ -255,56 +252,6 @@ class ConnectionRevoker:
         )
         if result.returncode:
             raise InstallError("the failed install's new Homing connection could not be revoked")
-
-
-class V1JobInspector:
-    def __init__(self, uid=None):
-        self.domain = "gui/%s" % (uid if uid is not None else os.getuid())
-
-    def loaded(self, label):
-        result = subprocess.run(
-            ["launchctl", "print", self.domain + "/" + label],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        if result.returncode == 0:
-            return True
-        if result.returncode in (3, 113):
-            return False
-        raise InstallError("could not verify that the recorded v1 job is stopped")
-
-
-class RetirementRevoker:
-    """Revoke through the credential-reading client without exposing the retained v1 key."""
-
-    def revoke(self, client_path, connection, service, account):
-        result = subprocess.run(
-            [
-                sys.executable,
-                str(client_path),
-                "--service",
-                service,
-                "--account",
-                account,
-                "disconnect",
-                "--connection",
-                connection,
-            ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=30,
-            env={"PATH": "/usr/bin:/bin:/usr/local/bin"},
-        )
-        if result.returncode == 0:
-            return "revoked"
-        try:
-            error = json.loads(result.stderr).get("error")
-        except (json.JSONDecodeError, AttributeError):
-            error = None
-        raise InstallError(
-            "the recorded v1 connection could not be revoked (%s)" % (error or "client_error")
-        )
 
 
 def launch_agent_bytes(paths, python=sys.executable):
@@ -932,320 +879,6 @@ def repair(package, release_manifest, paths=None, keychain=None, launch_agent=No
         shutil.rmtree(str(stage), ignore_errors=True)
 
 
-def create_v1_rollback(v1_manifest_path, paths=None, v1_connection_id=None):
-    """Save exact v1-owned files and nonsecret identity metadata in a private bundle."""
-    paths = paths or InstallPaths()
-    source_manifest = _read_json(v1_manifest_path)
-    if source_manifest.get("schema") != 1:
-        raise InstallError("unsupported v1 install manifest")
-    manifest_connection_id = source_manifest.get("connection_id")
-    if (
-        manifest_connection_id
-        and v1_connection_id
-        and (str(manifest_connection_id).lower() != str(v1_connection_id).lower())
-    ):
-        raise InstallError("verified v1 connection identity conflicts with its manifest")
-    connection_id = manifest_connection_id or v1_connection_id
-    try:
-        canonical_connection_id = str(uuid.UUID(str(connection_id)))
-        if canonical_connection_id != str(connection_id).lower():
-            raise ValueError
-    except (ValueError, TypeError, AttributeError) as exc:
-        raise InstallError("v1 manifest has no valid connection identity") from exc
-    scheduler = source_manifest.get("scheduler", {})
-    secret_store = source_manifest.get("secret_store", {})
-    if not all(
-        isinstance(secret_store.get(name), str) and secret_store[name]
-        for name in ("service", "account")
-    ):
-        raise InstallError("v1 manifest has incomplete Keychain identity")
-    artifacts = scheduler.get("artifacts") or []
-    job_path_raw = scheduler.get("path") or (artifacts[0] if artifacts else None)
-    if (
-        scheduler.get("kind") != "launchd"
-        or not scheduler.get("identifier")
-        or not job_path_raw
-        or artifacts != [job_path_raw]
-    ):
-        raise InstallError("v1 rollback requires one identified LaunchAgent")
-    try:
-        if plistlib.loads(Path(job_path_raw).read_bytes()).get("Label") != scheduler["identifier"]:
-            raise InstallError("v1 LaunchAgent identity does not match its manifest")
-    except (OSError, plistlib.InvalidFileException) as exc:
-        raise InstallError("v1 LaunchAgent is unreadable") from exc
-    file_entries = source_manifest.get("files") or []
-    candidates = []
-    for entry in file_entries:
-        if not isinstance(entry, dict) or not entry.get("path"):
-            raise InstallError("v1 manifest contains an invalid file entry")
-        candidates.append((Path(entry["path"]), entry.get("sha256")))
-    candidates.extend((Path(path), None) for path in artifacts)
-    candidates.append((Path(v1_manifest_path), None))
-    symlinks = []
-    for link in source_manifest.get("links") or []:
-        if not isinstance(link, dict) or link.get("kind") not in ("symlink", "copy"):
-            raise InstallError("v1 manifest contains an invalid linked skill entry")
-        link_path = Path(link.get("path", ""))
-        if link["kind"] == "symlink":
-            if not link_path.is_symlink() or os.readlink(str(link_path)) != link.get("target"):
-                raise InstallError("v1 linked skill has drifted: %s" % link_path)
-            identity = (os.path.abspath(str(link_path)), link.get("target"))
-            if identity not in symlinks:
-                symlinks.append(identity)
-        else:
-            digests = link.get("sha256") or {}
-            if not isinstance(digests, dict):
-                raise InstallError("v1 copied skill has invalid digests")
-            for name, expected in digests.items():
-                if _safe_member(name) is None or len(PurePosixPath(name).parts) != 1:
-                    raise InstallError("v1 copied skill contains an unsafe path")
-                candidates.append((link_path / name, expected))
-    unique = []
-    seen = set()
-    for source, expected in candidates:
-        source = source.resolve()
-        if str(source) in seen:
-            continue
-        seen.add(str(source))
-        if not source.is_file() or source.is_symlink():
-            raise InstallError("v1 rollback source is not a regular file: %s" % source)
-        actual = sha256_file(source)
-        if expected and actual != expected:
-            raise InstallError("v1 rollback source has drifted: %s" % source)
-        unique.append((source, actual))
-    if (
-        len(unique) > MAX_ROLLBACK_FILES
-        or sum(path.stat().st_size for path, _ in unique) > MAX_TOTAL_BYTES
-    ):
-        raise InstallError("v1 rollback bundle exceeds its bounds")
-    if paths.rollback.exists():
-        raise InstallError("a v1 rollback bundle already exists")
-    paths.root.mkdir(parents=True, exist_ok=True)
-    stage = Path(tempfile.mkdtemp(prefix=".rollback-v1-", dir=str(paths.root)))
-    try:
-        stored = []
-        payload_root = stage / "files"
-        payload_root.mkdir()
-        for index, (source, digest) in enumerate(unique):
-            payload = payload_root / str(index)
-            shutil.copyfile(str(source), str(payload))
-            os.chmod(str(payload), 0o600)
-            stored.append(
-                {
-                    "source": str(source),
-                    "payload": "files/%s" % index,
-                    "bytes": source.stat().st_size,
-                    "sha256": digest,
-                    "mode": stat.S_IMODE(source.stat().st_mode),
-                }
-            )
-        record = {
-            "schema": 1,
-            "files": stored,
-            "symlinks": [{"path": path, "target": target} for path, target in symlinks],
-            "launch_agent": {"label": scheduler["identifier"], "path": job_path_raw},
-            "keychain": {
-                "service": secret_store["service"],
-                "account": secret_store["account"],
-            },
-            "connection_id": canonical_connection_id,
-            "retirement": {"connection_revoked": False, "keychain_deleted": False},
-            "directories": [
-                entry.get("path")
-                for entry in source_manifest.get("dirs", [])
-                if isinstance(entry, dict) and entry.get("path")
-            ],
-        }
-        (stage / "rollback-manifest.json").write_text(
-            json.dumps(record, sort_keys=True, indent=2) + "\n", encoding="utf-8"
-        )
-        (stage / OWNER_MARKER).write_text("v1 rollback for " + LABEL + "\n", encoding="utf-8")
-        os.chmod(str(stage / "rollback-manifest.json"), 0o600)
-        os.chmod(str(stage / OWNER_MARKER), 0o600)
-        stage.rename(paths.rollback)
-        return record
-    finally:
-        if stage.exists():
-            shutil.rmtree(str(stage), ignore_errors=True)
-
-
-def deactivate_v1(rollback_record, paths=None, launch_agent=None):
-    """Stop v1 and remove only files proven present in its rollback bundle."""
-    paths = paths or InstallPaths()
-    launch_agent = launch_agent or LaunchAgent()
-    job = rollback_record.get("launch_agent", {})
-    job_path = Path(job.get("path", ""))
-    launch_agent.stop(job_path)
-    for entry in rollback_record.get("files", []):
-        target = Path(entry["source"])
-        if target.exists():
-            if (
-                not target.is_file()
-                or target.is_symlink()
-                or sha256_file(target) != entry["sha256"]
-            ):
-                raise InstallError("refusing to remove changed v1 file: %s" % target)
-            target.unlink()
-    for entry in rollback_record.get("symlinks", []):
-        target = Path(entry["path"])
-        if target.is_symlink() and os.readlink(str(target)) == entry["target"]:
-            target.unlink()
-        elif target.exists() or target.is_symlink():
-            raise InstallError("refusing to remove changed v1 link: %s" % target)
-    for raw in sorted(rollback_record.get("directories", []), key=len, reverse=True):
-        try:
-            Path(raw).rmdir()
-        except OSError:
-            pass
-
-
-def restore_v1(paths=None, launch_agent=None):
-    """Restore the retained v1 files exactly. The caller must stop/remove v2 first."""
-    paths = paths or InstallPaths()
-    launch_agent = launch_agent or LaunchAgent()
-    manifest_path = paths.rollback / "rollback-manifest.json"
-    if not manifest_path.is_file():
-        raise InstallError("no v1 rollback bundle is available")
-    record = _read_json(manifest_path)
-    restored = []
-    for entry in record.get("files", []):
-        payload = paths.rollback / entry["payload"]
-        if (
-            not payload.is_file()
-            or payload.stat().st_size != entry["bytes"]
-            or sha256_file(payload) != entry["sha256"]
-        ):
-            raise InstallError("v1 rollback bundle is damaged")
-        target = Path(entry["source"])
-        if target.exists() and (not target.is_file() or sha256_file(target) != entry["sha256"]):
-            raise InstallError("refusing to overwrite a changed path during rollback: %s" % target)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if not target.exists():
-            shutil.copyfile(str(payload), str(target))
-            os.chmod(str(target), entry["mode"])
-            restored.append(str(target))
-    for entry in record.get("symlinks", []):
-        target = Path(entry["path"])
-        if target.exists() or target.is_symlink():
-            if not target.is_symlink() or os.readlink(str(target)) != entry["target"]:
-                raise InstallError(
-                    "refusing to overwrite a changed link during rollback: %s" % target
-                )
-            continue
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.symlink_to(entry["target"])
-        restored.append(str(target))
-    launch_agent.start(Path(record["launch_agent"]["path"]))
-    return {"status": "v1_restored", "restored": restored, "keychain": record.get("keychain")}
-
-
-def _write_rollback_record(paths, record):
-    target = paths.rollback / "rollback-manifest.json"
-    staged = paths.rollback / "rollback-manifest.json.new"
-    staged.write_text(json.dumps(record, sort_keys=True, indent=2) + "\n", encoding="utf-8")
-    os.chmod(str(staged), 0o600)
-    os.replace(str(staged), str(target))
-
-
-def _validated_retirement_record(paths):
-    marker = paths.rollback / OWNER_MARKER
-    manifest_path = paths.rollback / "rollback-manifest.json"
-    if not paths.rollback.exists():
-        return None
-    try:
-        marker_text = marker.read_text(encoding="utf-8")
-    except (OSError, UnicodeError) as exc:
-        raise InstallError("the v1 rollback bundle is not owned by this installation") from exc
-    if not paths.rollback.is_dir() or marker_text != "v1 rollback for " + LABEL + "\n":
-        raise InstallError("the v1 rollback bundle is not owned by this installation")
-    record = _read_json(manifest_path)
-    try:
-        connection = str(uuid.UUID(record["connection_id"]))
-        key = record["keychain"]
-        retirement = record["retirement"]
-        launch = record["launch_agent"]
-        files = record["files"]
-        if (
-            connection != record["connection_id"]
-            or not all(
-                isinstance(key.get(name), str) and key[name] for name in ("service", "account")
-            )
-            or set(retirement) != {"connection_revoked", "keychain_deleted"}
-            or not all(isinstance(value, bool) for value in retirement.values())
-            or not isinstance(launch.get("label"), str)
-            or not launch["label"]
-            or not isinstance(files, list)
-        ):
-            raise ValueError
-    except (KeyError, TypeError, ValueError, AttributeError) as exc:
-        raise InstallError("the v1 rollback retirement identity is invalid") from exc
-    expected = {OWNER_MARKER, "rollback-manifest.json"}
-    for entry in files:
-        if not isinstance(entry, dict):
-            raise InstallError("the v1 rollback bundle has invalid file metadata")
-        payload_name = entry.get("payload", "")
-        safe_payload = _safe_member(payload_name)
-        if safe_payload is None or safe_payload.parts[0] != "files":
-            raise InstallError("the v1 rollback bundle has an unsafe payload path")
-        payload = paths.rollback.joinpath(*safe_payload.parts)
-        if (
-            not payload.is_file()
-            or payload.is_symlink()
-            or payload.stat().st_size != entry.get("bytes")
-            or sha256_file(payload) != entry.get("sha256")
-        ):
-            raise InstallError("the v1 rollback bundle is damaged")
-        expected.add(payload.relative_to(paths.rollback).as_posix())
-    actual = {
-        path.relative_to(paths.rollback).as_posix()
-        for path in paths.rollback.rglob("*")
-        if path.is_file()
-    }
-    for path in paths.rollback.rglob("*"):
-        relative = path.relative_to(paths.rollback).as_posix()
-        if path.is_symlink() or (path.is_dir() and relative != "files"):
-            raise InstallError("the v1 rollback bundle contains unknown resources")
-    if actual != expected:
-        raise InstallError("the v1 rollback bundle contains unknown files")
-    return record
-
-
-def retire_v1(paths=None, keychain=None, job_inspector=None, revoker=None):
-    """Retire only the exact retained v1 connection, Keychain item, and rollback bundle."""
-    paths = paths or InstallPaths()
-    record = _validated_retirement_record(paths)
-    if record is None:
-        return {"status": "already_retired"}
-    keychain = keychain or Keychain()
-    job_inspector = job_inspector or V1JobInspector()
-    revoker = revoker or RetirementRevoker()
-    label = record["launch_agent"]["label"]
-    if job_inspector.loaded(label):
-        raise InstallError("v1 is still running; retirement did not begin")
-    key = record["keychain"]
-    retirement = record["retirement"]
-    if not retirement["connection_revoked"]:
-        if not keychain.exists(key["service"], key["account"]):
-            raise InstallError("the v1 Keychain item is absent before revocation was verified")
-        client_path = paths.runtime / "homing.py"
-        if not client_path.is_file():
-            raise InstallError("the v2 Homing client is unavailable for v1 retirement")
-        revoker.revoke(client_path, record["connection_id"], key["service"], key["account"])
-        retirement["connection_revoked"] = True
-        _write_rollback_record(paths, record)
-    if not retirement["keychain_deleted"]:
-        if keychain.exists(key["service"], key["account"]):
-            keychain.delete(key["service"], key["account"])
-        if keychain.exists(key["service"], key["account"]):
-            raise InstallError("the exact v1 Keychain item still exists")
-        retirement["keychain_deleted"] = True
-        _write_rollback_record(paths, record)
-    shutil.rmtree(str(paths.rollback))
-    if paths.rollback.exists():
-        raise InstallError("the v1 rollback bundle could not be removed")
-    return {"status": "retired", "connection_id": record["connection_id"]}
-
-
 def qualify_claude():
     executable = shutil.which("claude")
     if not executable:
@@ -1350,14 +983,9 @@ def main(argv=None):
         action.add_argument("--connection", required=True)
         action.add_argument("--keychain-service", required=True)
         action.add_argument("--keychain-account", required=True)
-        if command == "upgrade":
-            action.add_argument("--v1-manifest", required=True)
-            action.add_argument("--v1-connection-id", required=True)
     action = commands.add_parser("repair")
     action.add_argument("--package", required=True)
     action.add_argument("--release-manifest", required=True)
-    commands.add_parser("rollback")
-    commands.add_parser("retire-v1")
     args = parser.parse_args(argv)
     paths = InstallPaths(args.home)
     if args.command == "extract":
@@ -1389,34 +1017,16 @@ def main(argv=None):
             )
         )
         return 0
-    if args.command == "rollback":
-        try:
-            from uninstall import uninstall
-        except ImportError:
-            from .uninstall import uninstall
-        uninstall(paths)
-        print(json.dumps(restore_v1(paths), sort_keys=True))
-        return 0
-    if args.command == "retire-v1":
-        print(json.dumps(retire_v1(paths), sort_keys=True))
-        return 0
     if args.command == "upgrade":
-        rollback_record = create_v1_rollback(
-            args.v1_manifest, paths, v1_connection_id=args.v1_connection_id
+        manifest = install(
+            args.package,
+            _read_json(args.release_manifest),
+            args.connection,
+            args.keychain_service,
+            args.keychain_account,
+            paths=paths,
+            new_connection=False,
         )
-        try:
-            deactivate_v1(rollback_record, paths)
-            manifest = install(
-                args.package,
-                _read_json(args.release_manifest),
-                args.connection,
-                args.keychain_service,
-                args.keychain_account,
-                paths=paths,
-            )
-        except Exception:
-            restore_v1(paths)
-            raise
         print(
             json.dumps(
                 {
