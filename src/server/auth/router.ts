@@ -288,6 +288,7 @@ function profileJson(
 function tokenMetadata(token: AgentTokenRecord) {
   return {
     id: token.id,
+    protocol_version: token.scopes.some((scope) => scope === "agent-config:read") ? "v2" : "v1",
     name: token.name,
     prefix: token.tokenPrefix,
     scopes: token.scopes,
@@ -295,6 +296,7 @@ function tokenMetadata(token: AgentTokenRecord) {
     created_at: token.createdAt.toISOString(),
     last_used_at: iso(token.lastUsedAt),
     expires_at: token.expiresAt.toISOString(),
+    source_write_expires_at: iso(token.sourceWriteExpiresAt),
     revoked_at: iso(token.revokedAt),
   };
 }

@@ -1,4 +1,4 @@
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, sql } from "drizzle-orm";
 import { AGENT_SCOPE_SET, type AgentScope, V2_AGENT_SCOPE_SET } from "../../auth/scopes";
 import type { AgentTokenRecord } from "../../auth/types";
 import { getDatabase } from "../../db/client";
@@ -67,23 +67,23 @@ function tokenScopes(value: string[]): AgentScope[] {
 function tokenRecord(row: Row): AgentTokenRecord {
   return {
     id: String(row.id),
-    userId: Number(row.user_id),
+    userId: Number(row.userId),
     name: String(row.name),
-    tokenPrefix: String(row.token_prefix),
+    tokenPrefix: String(row.tokenPrefix),
     digest: String(row.digest),
     scopes: tokenScopes(stringArray(row.scopes)),
-    projectIds: stringArray(row.project_ids),
+    projectIds: stringArray(row.projectIds),
     expectedCadenceMinutes:
-      row.expected_cadence_minutes === null || row.expected_cadence_minutes === undefined
+      row.expectedCadenceMinutes === null || row.expectedCadenceMinutes === undefined
         ? null
-        : Number(row.expected_cadence_minutes),
-    environmentNote: String(row.environment_note),
-    exposedToChat: Boolean(row.exposed_to_chat),
-    sourceWriteExpiresAt: optionalDate(row.source_write_expires_at),
-    expiresAt: date(row.expires_at),
-    revokedAt: optionalDate(row.revoked_at),
-    lastUsedAt: optionalDate(row.last_used_at),
-    createdAt: date(row.created_at),
+        : Number(row.expectedCadenceMinutes),
+    environmentNote: String(row.environmentNote),
+    exposedToChat: Boolean(row.exposedToChat),
+    sourceWriteExpiresAt: optionalDate(row.sourceWriteExpiresAt),
+    expiresAt: date(row.expiresAt),
+    revokedAt: optionalDate(row.revokedAt),
+    lastUsedAt: optionalDate(row.lastUsedAt),
+    createdAt: date(row.createdAt),
   };
 }
 
@@ -102,28 +102,37 @@ function mapReport(row: Row, queries: Row[]): AgentRunReport | null {
     status,
     phase: runPhase(row.phase),
     queries: queries.map((query) => ({
-      source_query_revision_id: String(query.source_query_revision_id),
+      source_query_revision_id: String(query.sourceQueryRevisionId),
       status: String(query.status) as AgentRunReport["queries"][number]["status"],
-      ...(query.error_class === null || query.error_class === undefined
+      ...(query.errorClass === null || query.errorClass === undefined
         ? {}
-        : { error_class: String(query.error_class) }),
+        : { error_class: String(query.errorClass) }),
     })),
     counts: {
       source_queries_total: queries.length,
-      source_queries_attempted: Number(row.source_queries_attempted),
-      source_queries_completed: Number(row.source_queries_completed),
-      candidates_observed: Number(row.candidates_observed),
-      candidates_evaluated: Number(row.candidates_evaluated),
-      candidates_kept: Number(row.candidates_kept),
-      candidates_insufficient: Number(row.candidates_insufficient),
-      deliveries_acknowledged: Number(row.deliveries_acknowledged),
-      deliveries_pending: Number(row.deliveries_pending),
+      source_queries_attempted: Number(row.sourceQueriesAttempted),
+      source_queries_completed: Number(row.sourceQueriesCompleted),
+      candidates_observed: Number(row.candidatesObserved),
+      candidates_evaluated: Number(row.candidatesEvaluated),
+      candidates_kept: Number(row.candidatesKept),
+      candidates_insufficient: Number(row.candidatesInsufficient),
+      deliveries_acknowledged: Number(row.deliveriesAcknowledged),
+      deliveries_pending: Number(row.deliveriesPending),
     },
     failure:
-      row.failure_code === null || row.failure_code === undefined
+      row.failureCode === null || row.failureCode === undefined
         ? null
-        : { phase: runPhase(row.failure_phase), code: String(row.failure_code) },
+        : { phase: runPhase(row.failurePhase), code: String(row.failureCode) },
   };
+}
+
+async function mapReportForRun(db: Database, row: Row): Promise<AgentRunReport | null> {
+  const queries = await db
+    .select()
+    .from(agentRunQueries)
+    .where(eq(agentRunQueries.runId, String(row.id)))
+    .orderBy(asc(agentRunQueries.projectId), asc(agentRunQueries.sourceQueryRevision));
+  return mapReport(row, queries);
 }
 
 async function runProjects(db: Database, runId: string): Promise<RunSnapshotProject[]> {
@@ -160,10 +169,10 @@ async function mapRun(db: Database, row: Row): Promise<V2RunRecord> {
     .orderBy(asc(agentRunQueries.projectId), asc(agentRunQueries.sourceQueryRevision));
   return {
     id: String(row.id),
-    invocationId: String(row.invocation_id),
-    userId: Number(row.user_id),
-    tokenId: String(row.token_id),
-    agentLabel: String(row.agent_label),
+    invocationId: String(row.invocationId),
+    userId: Number(row.userId),
+    tokenId: String(row.tokenId),
+    agentLabel: String(row.agentLabel),
     status: runStatus(row.status),
     phase: runPhase(row.phase),
     projects: await runProjects(db, String(row.id)),
@@ -209,9 +218,9 @@ async function assertMembership(
 
 function queryInputEqual(row: Row, input: ConfigSourceQueryInput): boolean {
   return (
-    String(row.canonical_sha256) === input.canonicalSha256 &&
-    bytes(row.canonical_bytes).every((value, index) => value === input.canonicalBytes[index]) &&
-    bytes(row.canonical_bytes).byteLength === input.canonicalBytes.byteLength
+    String(row.canonicalSha256) === input.canonicalSha256 &&
+    bytes(row.canonicalBytes).every((value, index) => value === input.canonicalBytes[index]) &&
+    bytes(row.canonicalBytes).byteLength === input.canonicalBytes.byteLength
   );
 }
 
@@ -227,6 +236,10 @@ export class PostgresV2Repository implements V2Repository {
         configStatus: promptRevisions.configStatus,
         configRevision: promptRevisions.revision,
         configRevisionId: promptRevisions.id,
+        configSha256: promptRevisions.canonicalSha256,
+        requiredEvidence: promptRevisions.requiredEvidence,
+        prompt: projects.currentPrompt,
+        criteria: projects.criteria,
         pausedUntil: profiles.agentPausedUntil,
       })
       .from(projectMemberships)
@@ -235,15 +248,57 @@ export class PostgresV2Repository implements V2Repository {
       .leftJoin(promptRevisions, eq(promptRevisions.id, projects.currentConfigRevisionId))
       .where(and(eq(projectMemberships.userId, userId), eq(projects.status, "active")))
       .orderBy(asc(projects.name), asc(projects.id));
-    return rows.map((row) => ({
-      id: row.id,
-      name: row.name,
-      slug: row.slug,
-      configStatus: row.configStatus === "complete" ? "ready" : "needed",
-      configRevision: row.configRevision ?? null,
-      configRevisionId: row.configRevisionId ?? null,
-      pausedUntil: row.pausedUntil ?? null,
-    }));
+    return Promise.all(
+      rows.map(async (row) => {
+        const sourceRows = row.configRevisionId
+          ? await this.db
+              .select({
+                id: sourceQueryRevisions.id,
+                revision: sourceQueryRevisions.revision,
+                adapter: sourceQueryRevisions.adapter,
+                status: sourceQueryRevisions.status,
+                sha256: sourceQueryRevisions.canonicalSha256,
+              })
+              .from(promptRevisionSourceQueries)
+              .innerJoin(
+                sourceQueryRevisions,
+                eq(sourceQueryRevisions.id, promptRevisionSourceQueries.sourceQueryRevisionId),
+              )
+              .where(eq(promptRevisionSourceQueries.promptRevisionId, row.configRevisionId))
+              .orderBy(asc(promptRevisionSourceQueries.position))
+          : [];
+        const [latestRow] = await this.db
+          .select()
+          .from(agentRuns)
+          .innerJoin(agentRunProjects, eq(agentRunProjects.runId, agentRuns.id))
+          .where(and(eq(agentRuns.userId, userId), eq(agentRunProjects.projectId, row.id)))
+          .orderBy(desc(agentRuns.startedAt))
+          .limit(1);
+        return {
+          id: row.id,
+          name: row.name,
+          slug: row.slug,
+          configStatus: row.configStatus === "complete" ? "ready" : "needed",
+          configRevision: row.configRevision ?? null,
+          configRevisionId: row.configRevisionId ?? null,
+          configSha256: row.configSha256 ?? null,
+          prompt: row.prompt,
+          criteria: row.criteria,
+          requiredEvidence: stringArray(
+            row.requiredEvidence,
+          ) as V2ProjectSummary["requiredEvidence"],
+          sourceQueries: sourceRows,
+          pausedUntil: row.pausedUntil ?? null,
+          latestRun: latestRow
+            ? {
+                status: runStatus(latestRow.agent_runs.status),
+                phase: runPhase(latestRow.agent_runs.phase),
+                report: await mapReportForRun(this.db, latestRow.agent_runs as Row),
+              }
+            : null,
+        };
+      }),
+    );
   }
 
   async getConfigRevision(
@@ -552,6 +607,7 @@ export class PostgresV2Repository implements V2Repository {
         await assertMembership(transaction as unknown as Database, input.userId, project.projectId);
         const [config] = await transaction
           .select({
+            id: promptRevisions.id,
             projectId: promptRevisions.projectId,
             revision: promptRevisions.revision,
             sha256: promptRevisions.canonicalSha256,
@@ -559,10 +615,16 @@ export class PostgresV2Repository implements V2Repository {
           })
           .from(promptRevisions)
           .where(
-            and(
-              eq(promptRevisions.id, project.promptRevisionId),
-              eq(promptRevisions.projectId, project.projectId),
-            ),
+            project.promptRevisionId === null
+              ? and(
+                  eq(promptRevisions.projectId, project.projectId),
+                  eq(promptRevisions.revision, project.promptRevision),
+                  eq(promptRevisions.canonicalSha256, project.canonicalSha256),
+                )
+              : and(
+                  eq(promptRevisions.id, project.promptRevisionId),
+                  eq(promptRevisions.projectId, project.projectId),
+                ),
           )
           .limit(1);
         if (
@@ -575,7 +637,7 @@ export class PostgresV2Repository implements V2Repository {
         await transaction.insert(agentRunProjects).values({
           runId: created.id,
           projectId: project.projectId,
-          promptRevisionId: project.promptRevisionId,
+          promptRevisionId: config.id,
           promptRevision: project.promptRevision,
           canonicalSha256: project.canonicalSha256,
         });
@@ -708,9 +770,20 @@ export class PostgresV2Repository implements V2Repository {
         true,
       );
       const [promptRevision] = await transaction
-        .select({ projectId: promptRevisions.projectId, status: promptRevisions.configStatus })
+        .select({
+          id: promptRevisions.id,
+          projectId: promptRevisions.projectId,
+          status: promptRevisions.configStatus,
+        })
         .from(promptRevisions)
-        .where(eq(promptRevisions.id, input.promptRevisionId))
+        .where(
+          input.promptRevisionId === null
+            ? and(
+                eq(promptRevisions.projectId, input.projectId),
+                eq(promptRevisions.revision, input.promptRevision),
+              )
+            : eq(promptRevisions.id, input.promptRevisionId),
+        )
         .limit(1);
       if (
         !promptRevision ||
@@ -769,7 +842,7 @@ export class PostgresV2Repository implements V2Repository {
         .values({
           projectId: input.projectId,
           leadId,
-          promptRevisionId: input.promptRevisionId,
+          promptRevisionId: promptRevision.id,
           factsHash: input.factsHash,
           disposition: input.disposition,
           reason: input.reason,
@@ -793,7 +866,7 @@ export class PostgresV2Repository implements V2Repository {
           and(
             eq(matchObservations.projectId, input.projectId),
             eq(matchObservations.leadId, leadId),
-            eq(matchObservations.promptRevisionId, input.promptRevisionId),
+            eq(matchObservations.promptRevisionId, promptRevision.id),
             eq(matchObservations.factsHash, input.factsHash),
           ),
         )

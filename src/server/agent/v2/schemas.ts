@@ -218,6 +218,75 @@ export const v2PauseSchema = z
     message: "paused or paused_until is required",
   });
 
+/** Exact request shapes emitted by the reviewed Python v2 client. */
+export const v2ClientConfigCreateSchema = z
+  .object({
+    expected_revision: z.number().int().nonnegative().nullable().optional(),
+    required_evidence: z.array(requiredEvidenceKeySchema).max(requiredEvidenceKeys.length),
+    acquisition_basis: objectSchema,
+    source_queries: z.array(v2SourceQueryInputSchema).min(1).max(8),
+  })
+  .strict();
+
+export const v2WireConfigCreateSchema = z.union([v2ConfigCreateSchema, v2ClientConfigCreateSchema]);
+
+export const v2ClientRunProjectSchema = z
+  .object({
+    project_id: z.string().uuid(),
+    config_revision: z.coerce.number().int().positive(),
+    config_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+    source_queries: z
+      .array(
+        z
+          .object({
+            id: z.string().uuid(),
+            revision: z.coerce.number().int().positive(),
+            sha256: z.string().regex(/^[0-9a-f]{64}$/),
+          })
+          .strict(),
+      )
+      .max(8),
+  })
+  .strict();
+
+export const v2ClientRunCreateSchema = z
+  .object({
+    invocation_id: z.string().uuid(),
+    projects: z.array(v2ClientRunProjectSchema).min(1).max(100),
+    phase: z.literal("snapshot").optional(),
+  })
+  .strict();
+
+export const v2WireRunCreateSchema = z.union([v2RunCreateSchema, v2ClientRunCreateSchema]);
+
+export const v2ClientDeliveryLeadSchema = z
+  .object({
+    source: sourceAdapterSchema,
+    source_listing_id: z.string().trim().min(1).max(300),
+    url: z.string().url().max(2_000),
+    title: z.string().max(500),
+    summary: z.string().max(10_000),
+    location: z.string().max(500),
+    price_amount: z
+      .string()
+      .regex(/^\d+(\.\d{1,2})?$/)
+      .nullable(),
+    price_display: z.string().max(200),
+    availability: z.string().max(500),
+    housing_type: z.enum(["entire", "shared", "unknown"]),
+  })
+  .strict();
+
+export const v2ClientDeliverySchema = z
+  .object({
+    prompt_revision: z.coerce.number().int().positive(),
+    facts_hash: z.string().regex(/^[0-9a-f]{64}$/),
+    lead: v2ClientDeliveryLeadSchema,
+  })
+  .strict();
+
+export const v2WireDeliverySchema = z.union([v2DeliverySchema, v2ClientDeliverySchema]);
+
 export type RequiredEvidenceKey = (typeof requiredEvidenceKeys)[number];
 export type SourceAdapter = z.infer<typeof sourceAdapterSchema>;
 export type EvidenceState = z.infer<typeof evidenceStateSchema>;

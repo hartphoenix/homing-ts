@@ -10,11 +10,11 @@ import type {
   V2ConfigRevision,
   V2Repository,
 } from "./repository";
-import type { v2ConfigCreateSchema, v2DeliverySchema, v2RunCreateSchema } from "./schemas";
+import type { v2ConfigCreateSchema, v2WireDeliverySchema, v2WireRunCreateSchema } from "./schemas";
 
 type V2ConfigCreate = import("zod").infer<typeof v2ConfigCreateSchema>;
-type V2Delivery = import("zod").infer<typeof v2DeliverySchema>;
-type V2RunCreate = import("zod").infer<typeof v2RunCreateSchema>;
+type V2Delivery = import("zod").infer<typeof v2WireDeliverySchema>;
+type V2RunCreate = import("zod").infer<typeof v2WireRunCreateSchema>;
 
 export class V2Service {
   constructor(private readonly repository: V2Repository) {}
@@ -83,23 +83,38 @@ export class V2Service {
     return this.repository.createConfigRevision(input);
   }
 
-  async createRun(userId: number, tokenId: string, body: V2RunCreate) {
+  async createRun(userId: number, tokenId: string, agentLabel: string, body: V2RunCreate) {
+    const internal = "agent_label" in body;
     const input: CreateRunInput = {
       userId,
       tokenId,
       invocationId: body.invocation_id,
-      agentLabel: body.agent_label,
-      projects: body.projects.map((project) => ({
-        projectId: project.project_id,
-        promptRevisionId: project.prompt_revision_id,
-        promptRevision: project.prompt_revision,
-        canonicalSha256: project.canonical_sha256,
-        queries: project.queries.map((query) => ({
-          sourceQueryRevisionId: query.source_query_revision_id,
-          sourceQueryRevision: query.source_query_revision,
-          canonicalSha256: query.canonical_sha256,
-        })),
-      })),
+      agentLabel: internal ? body.agent_label : agentLabel,
+      projects: body.projects.map((project) =>
+        "prompt_revision_id" in project
+          ? {
+              projectId: project.project_id,
+              promptRevisionId: project.prompt_revision_id,
+              promptRevision: project.prompt_revision,
+              canonicalSha256: project.canonical_sha256,
+              queries: project.queries.map((query) => ({
+                sourceQueryRevisionId: query.source_query_revision_id,
+                sourceQueryRevision: query.source_query_revision,
+                canonicalSha256: query.canonical_sha256,
+              })),
+            }
+          : {
+              projectId: project.project_id,
+              promptRevisionId: null,
+              promptRevision: project.config_revision,
+              canonicalSha256: project.config_sha256,
+              queries: project.source_queries.map((query) => ({
+                sourceQueryRevisionId: query.id,
+                sourceQueryRevision: query.revision,
+                canonicalSha256: query.sha256,
+              })),
+            },
+      ),
     };
     return this.repository.createRun(input);
   }
@@ -117,30 +132,32 @@ export class V2Service {
   }
 
   async deliver(userId: number, tokenId: string, projectId: string, body: V2Delivery) {
+    const internal = "prompt_revision_id" in body;
     const input: DeliverInput = {
       userId,
       tokenId,
       projectId,
-      promptRevisionId: body.prompt_revision_id,
+      promptRevisionId: internal ? body.prompt_revision_id : null,
+      promptRevision: internal ? body.prompt_revision_id : body.prompt_revision,
       factsHash: body.facts_hash,
-      disposition: body.disposition,
-      reason: body.reason,
-      unknowns: body.unknowns,
+      disposition: "kept",
+      reason: internal ? body.reason : "",
+      unknowns: internal ? body.unknowns : [],
       lead: {
         source: body.lead.source,
         sourceListingId: body.lead.source_listing_id,
-        canonicalUrl: body.lead.canonical_url,
+        canonicalUrl: internal ? body.lead.canonical_url : body.lead.url,
         title: body.lead.title,
         summary: body.lead.summary,
         location: body.lead.location,
         priceDisplay: body.lead.price_display,
         priceAmount: body.lead.price_amount,
-        priceCurrency: body.lead.price_currency,
+        priceCurrency: internal ? body.lead.price_currency : "USD",
         availability: body.lead.availability,
         housingType: body.lead.housing_type,
-        listedAt: body.lead.listed_at,
-        attributes: body.lead.attributes,
-        verificationNotes: body.lead.verification_notes,
+        listedAt: internal ? body.lead.listed_at : null,
+        attributes: internal ? body.lead.attributes : {},
+        verificationNotes: internal ? body.lead.verification_notes : "",
       },
     };
     return this.repository.deliver(input);

@@ -23,10 +23,10 @@ import type { V2ProjectSummary, V2Repository, V2RunRecord } from "./repository";
 import {
   protocolVersionSchema,
   v2ConfigCreateSchema,
-  v2DeliverySchema,
   v2PairingRequestSchema,
   v2PauseSchema,
-  v2RunCreateSchema,
+  v2WireDeliverySchema,
+  v2WireRunCreateSchema,
 } from "./schemas";
 import { V2_INITIAL_SCOPES } from "./scopes";
 import { V2Service } from "./service";
@@ -349,6 +349,7 @@ export function createV2Router(deps: V2RouterDependencies) {
       const profile = await deps.auth.repo.findProfileByUserId(principal.user.id);
       return context.json({
         protocol_version: 2,
+        id: principal.token.id,
         connection_id: principal.token.id,
         expires_at: principal.token.expiresAt.toISOString(),
         scopes: principal.token.scopes,
@@ -362,22 +363,28 @@ export function createV2Router(deps: V2RouterDependencies) {
     "/agent/projects",
     withErrors(async (context) => {
       const principal = await resolvePrincipal(context, deps.auth);
-      const token = service.requireScope(principal, "agent-config:read");
+      const token =
+        principal.kind === "agent" ? service.requireScope(principal, "agent-config:read") : null;
       const profile = await deps.auth.repo.findProfileByUserId(principal.user.id);
       const projects = await deps.repository.listProjects(principal.user.id);
       return context.json({
         protocol_version: 2,
+        agent_paused_until: profile?.agentPausedUntil?.toISOString() ?? null,
         paused_until: profile?.agentPausedUntil?.toISOString() ?? null,
         projects: projects.map((project: V2ProjectSummary) => ({
           project_id: project.id,
           name: project.name,
           slug: project.slug,
           config_status: project.configStatus,
+          current_config_revision: project.configRevision,
           config_revision: project.configRevision,
-          config_revision_id: project.configRevisionId,
+          config_sha256: project.configSha256,
+          required_evidence: project.requiredEvidence,
+          source_queries: project.sourceQueries,
+          latest_run: project.latestRun,
           paused_until: project.pausedUntil?.toISOString() ?? null,
         })),
-        scopes: token.scopes,
+        scopes: token?.scopes ?? [],
       });
     }),
   );
@@ -447,8 +454,8 @@ export function createV2Router(deps: V2RouterDependencies) {
     withErrors(async (context) => {
       const principal = await resolvePrincipal(context, deps.auth);
       const token = service.requireScope(principal, "agent-runs:write");
-      const body = parseBody(v2RunCreateSchema, await jsonBody(context));
-      const result = await service.createRun(principal.user.id, token.id, body);
+      const body = parseBody(v2WireRunCreateSchema, await jsonBody(context));
+      const result = await service.createRun(principal.user.id, token.id, token.name, body);
       return context.json(runJson(result.run), result.replayed ? 200 : 201);
     }),
   );
@@ -474,7 +481,7 @@ export function createV2Router(deps: V2RouterDependencies) {
     withErrors(async (context) => {
       const principal = await resolvePrincipal(context, deps.auth);
       const token = service.requireScope(principal, "agent-deliveries:write");
-      const body = parseBody(v2DeliverySchema, await jsonBody(context));
+      const body = parseBody(v2WireDeliverySchema, await jsonBody(context));
       const result = await service.deliver(
         principal.user.id,
         token.id,
@@ -482,7 +489,12 @@ export function createV2Router(deps: V2RouterDependencies) {
         body,
       );
       return context.json(
-        { ...result, lead_id: result.leadId, observation_id: result.observationId },
+        {
+          ...result,
+          outcome: result.status,
+          lead_id: result.leadId,
+          observation_id: result.observationId,
+        },
         result.status === "created" ? 201 : 200,
       );
     }),

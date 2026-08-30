@@ -1,7 +1,12 @@
+import { spawn } from "node:child_process";
+import { createServer } from "node:http";
+
 import { describe, expect, test } from "vitest";
+import { sha256Hex } from "../../src/server/agent/v2/canonical";
 import type { V2Repository } from "../../src/server/agent/v2/repository";
 import { createV2Router } from "../../src/server/agent/v2/router";
 import type { RequiredEvidenceKey } from "../../src/server/agent/v2/schemas";
+import { createApp } from "../../src/server/app";
 import { digestOpaque } from "../../src/server/auth/crypto";
 import type { AuthRepository } from "../../src/server/auth/repository";
 import type { AgentTokenRecord, AuthProfile, AuthUser } from "../../src/server/auth/types";
@@ -48,7 +53,7 @@ const token: AgentTokenRecord = {
 const projectId = "22222222-2222-4222-8222-222222222222";
 const queryId = "33333333-3333-4333-8333-333333333333";
 const runId = "44444444-4444-4444-8444-444444444444";
-const hash = "a".repeat(64);
+const hash = sha256Hex(new TextEncoder().encode('{"version":1}'));
 
 function build() {
   const configBytes = new TextEncoder().encode('{"version":1}');
@@ -77,7 +82,15 @@ function build() {
         configStatus: "ready",
         configRevision: 1,
         configRevisionId: 12,
+        configSha256: hash,
+        prompt: "Find a home",
+        criteria: {},
+        requiredEvidence: ["location", "price", "availability", "housing_type"],
+        sourceQueries: [
+          { id: queryId, revision: 1, adapter: "zumper-com", status: "ready", sha256: hash },
+        ],
         pausedUntil: null,
+        latestRun: null,
       },
     ],
     getConfigRevision: async () => config,
@@ -146,13 +159,14 @@ function build() {
     findUserById: async (id: number) => (id === user.id ? user : null),
     findProfileByUserId: async () => profile,
     touchToken: async () => {},
+    revokeToken: async () => true,
   } as unknown as AuthRepository;
   const router = createV2Router({
     repository,
     auth: { repo: auth, origin: "https://homing.test" },
     now: () => new Date("2026-08-29T00:00:00.000Z"),
   });
-  return { router, calls };
+  return { router, calls, repository, auth };
 }
 
 const authHeader = { Authorization: "Bearer v2-secret" };
@@ -275,5 +289,97 @@ describe("v2 server contract", () => {
     );
     expect(delivery.status).toBe(201);
     expect(calls.delivery).toBeDefined();
+  });
+});
+
+describe("reviewed Python client wire contract", () => {
+  test("can drive the Hono transport through snapshot, run, delivery, and disconnect", async () => {
+    const { repository, auth } = build();
+    const app = createApp({
+      auth: { repo: auth, origin: "https://homing.test" },
+      v2: { repository },
+      spaIndex: () => new Response("spa"),
+    });
+    const packagePath = `${process.cwd()}/agentkit/package`;
+    const server = createServer(async (request, response) => {
+      try {
+        const chunks: Buffer[] = [];
+        for await (const chunk of request) chunks.push(Buffer.from(chunk));
+        const url = new URL(request.url ?? "/", "http://127.0.0.1");
+        const body = chunks.length ? Buffer.concat(chunks) : undefined;
+        const init: RequestInit = {
+          headers: request.headers as HeadersInit,
+          ...(request.method ? { method: request.method } : {}),
+          ...(request.method === "GET" || request.method === "HEAD" || !body ? {} : { body }),
+        };
+        const result = await app.fetch(new Request(url, init));
+        response.statusCode = result.status;
+        result.headers.forEach((value, name) => {
+          response.setHeader(name, value);
+        });
+        response.end(Buffer.from(await result.arrayBuffer()));
+      } catch (error) {
+        response.statusCode = 500;
+        response.end(String(error));
+      }
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as { port: number }).port;
+    const script = `
+import json, os, sys, urllib.error, urllib.request, urllib.parse, uuid
+sys.path.insert(0, sys.argv[1])
+from homing import HomingClient, Response
+
+base = sys.argv[2]
+def transport(method, url, body, headers):
+    parsed = urllib.parse.urlsplit(url)
+    request = urllib.request.Request(base + parsed.path, data=body, method=method, headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=5) as result:
+            return Response(result.status, result.read(), dict(result.headers.items()))
+    except urllib.error.HTTPError as error:
+        return Response(error.code, error.read(), dict(error.headers.items()))
+
+client = HomingClient("https://homing.test", lambda: "v2-secret", transport=transport)
+projects = client.projects()
+assert len(projects) == 1
+project = projects[0]
+project_id = project["project_id"]
+config = client.config_revision(project_id, str(project["current_config_revision"]), project["config_sha256"])
+query = project["source_queries"][0]
+source = client.source_revision(project_id, str(query["id"]), query["sha256"])
+assert config["version"] == 1 and source["version"] == 1
+snapshot = [{"project_id": project_id, "config_revision": project["current_config_revision"], "config_sha256": project["config_sha256"], "source_queries": [{"id": query["id"], "revision": query["revision"], "sha256": query["sha256"]}]}]
+run_id = client.create_run(str(uuid.uuid4()), snapshot)
+client.finish_run(run_id, {"status": "completed", "phase": "finish", "queries": [{"source_query_revision_id": query["id"], "status": "completed"}], "counts": {"source_queries_total": 1, "source_queries_attempted": 1, "source_queries_completed": 1, "candidates_observed": 0, "candidates_evaluated": 0, "candidates_kept": 0, "candidates_insufficient": 0, "deliveries_acknowledged": 0, "deliveries_pending": 0}, "failure": None})
+delivery = client.deliver(project_id, {"prompt_revision": project["current_config_revision"], "facts_hash": "${"a".repeat(64)}", "lead": {"source": "zumper-com", "source_listing_id": "python-1", "url": "https://example.test/python-1", "title": "Home", "summary": "", "location": "Brooklyn", "price_amount": "2500.00", "price_display": "$2,500", "availability": "now", "housing_type": "entire"}}, "delivery-key")
+assert delivery.get("outcome") in {"created", "existing"}
+assert isinstance(client.finalize_setup(), dict)
+assert str(uuid.UUID(client.connection_id()))
+client.disconnect()
+print("ok")
+`;
+    try {
+      const result = await new Promise<{ status: number | null; stdout: string; stderr: string }>(
+        (resolve) => {
+          const child = spawn("python3", ["-c", script, packagePath, `http://127.0.0.1:${port}`]);
+          let stdout = "";
+          let stderr = "";
+          child.stdout.on("data", (chunk: Buffer) => {
+            stdout += chunk.toString();
+          });
+          child.stderr.on("data", (chunk: Buffer) => {
+            stderr += chunk.toString();
+          });
+          child.on("close", (status) => resolve({ status, stdout, stderr }));
+        },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain("ok");
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
   });
 });

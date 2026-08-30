@@ -8,7 +8,19 @@ export type V2ProjectSummary = {
   configStatus: "needed" | "ready";
   configRevision: number | null;
   configRevisionId: number | null;
+  configSha256: string | null;
+  prompt: string;
+  criteria: Record<string, unknown>;
+  requiredEvidence: RequiredEvidenceKey[];
+  sourceQueries: Array<{
+    id: string;
+    revision: number;
+    adapter: SourceAdapter;
+    status: "needs_review" | "ready";
+    sha256: string;
+  }>;
   pausedUntil: Date | null;
+  latestRun: Pick<V2RunRecord, "status" | "phase" | "report"> | null;
 };
 
 export type V2SourceQueryRevision = {
@@ -61,7 +73,7 @@ export type RunSnapshotQuery = {
 
 export type RunSnapshotProject = {
   projectId: string;
-  promptRevisionId: number;
+  promptRevisionId: number | null;
   promptRevision: number;
   canonicalSha256: string;
   queries: RunSnapshotQuery[];
@@ -108,7 +120,8 @@ export type DeliverInput = {
   userId: number;
   tokenId: string;
   projectId: string;
-  promptRevisionId: number;
+  promptRevisionId: number | null;
+  promptRevision: number;
   factsHash: string;
   disposition: "kept";
   reason: string;
