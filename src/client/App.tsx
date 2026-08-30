@@ -20,18 +20,25 @@ import {
 } from "react-router";
 import { buildAgentSetupPrompt } from "./agentSetup";
 import {
+  type AgentProject,
+  type AgentProjectsResponse,
+  type AgentRunOutcome,
+  type AgentSourceQuery,
   ApiError,
   api,
   type Comment,
   clearCsrf,
+  fetchAgentProjects,
   type InvitationDetails,
   type Lead,
   login,
   type Me,
   type Profile,
   type Project,
+  refreshAgentSource,
   registerInvitation,
   type SourcePlanReview,
+  setAgentPause,
 } from "./api";
 import { detectedTimezone, timezoneLabel, timezoneOptions } from "./timezones";
 
@@ -45,6 +52,8 @@ type AgentTokenSummary = {
   project_ids?: string[];
   revoked_at: string | null;
   scopes?: string[];
+  protocol_version?: "v1" | "v2";
+  source_write_expires_at?: string | null;
 };
 
 const backgroundOptions = [
@@ -1816,6 +1825,223 @@ function Placeholder({ title, children }: { title: string; children: ReactNode }
   );
 }
 
+function lifecycleProjectId(project: AgentProject): string {
+  return project.id ?? project.project_id ?? "unknown-project";
+}
+
+function lifecycleProjectName(project: AgentProject): string {
+  return project.name ?? lifecycleProjectId(project);
+}
+
+function evidenceLabel(value: string): string {
+  return value.replaceAll("_", " ");
+}
+
+function sourceLabel(source: AgentSourceQuery): string {
+  return source.adapter.replace(/-com$/, "");
+}
+
+function runOutcomeLabel(run: AgentRunOutcome | null | undefined): string {
+  if (!run) return "No run outcome reported yet.";
+  if (run.status === "started") return "In progress; no final outcome has been reported.";
+  if (run.status === "completed") return "Completed.";
+  if (run.status === "incomplete") return "Incomplete; work remains for a later run.";
+  return "Failed; this run did not complete successfully.";
+}
+
+function AgentConfigurationDetails({ project }: { project: AgentProject }) {
+  const status = project.config_status === "ready" ? "ready" : "needed";
+  const basis = project.acquisition_basis;
+  const requirements = project.required_evidence ?? [];
+  const sources = project.source_queries ?? [];
+  return (
+    <article className="agent-lifecycle-project">
+      <div className="agent-lifecycle-project-heading">
+        <h3>{lifecycleProjectName(project)}</h3>
+        <span className={`pill is-${status}`}>
+          {status === "ready" ? "Configuration ready" : "Configuration needed"}
+        </span>
+      </div>
+      {status === "needed" ? (
+        <p className="quiet small">
+          An attended setup or source refresh must confirm requirements and sources before the agent
+          can search this project.
+        </p>
+      ) : (
+        <div className="agent-lifecycle-details">
+          <div>
+            <strong>Current requirements</strong>
+            {requirements.length > 0 ? (
+              <ul>
+                {requirements.map((requirement) => (
+                  <li key={requirement}>{evidenceLabel(requirement)}</li>
+                ))}
+                {basis?.locations && basis.locations.length > 0 && (
+                  <li>Locations: {basis.locations.join(", ")}</li>
+                )}
+                {basis?.min_price_minor !== undefined || basis?.max_price_minor !== undefined ? (
+                  <li>
+                    Price:{" "}
+                    {basis.min_price_minor === null || basis.min_price_minor === undefined
+                      ? "no minimum"
+                      : `$${(basis.min_price_minor / 100).toLocaleString()}`}{" "}
+                    to{" "}
+                    {basis.max_price_minor === null || basis.max_price_minor === undefined
+                      ? "no maximum"
+                      : `$${(basis.max_price_minor / 100).toLocaleString()}`}
+                  </li>
+                ) : null}
+                {basis?.housing_types && basis.housing_types.length > 0 && (
+                  <li>Housing: {basis.housing_types.join(", ")}</li>
+                )}
+              </ul>
+            ) : (
+              <p className="quiet small">Requirements are not reported by this connection.</p>
+            )}
+          </div>
+          <div>
+            <strong>Configured sources</strong>
+            {sources.length > 0 ? (
+              <ul>
+                {sources.map((source, index) => (
+                  <li key={source.id ?? `${source.adapter}-${index}`}>
+                    {sourceLabel(source)}
+                    {source.status === "needs_review" ? " — refresh needed" : ""}
+                    {source.query?.url ? ` (${source.query.url})` : ""}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="quiet small">Sources are not reported by this connection.</p>
+            )}
+          </div>
+        </div>
+      )}
+      <div className="agent-lifecycle-run">
+        <strong>Latest run</strong>
+        <span>{runOutcomeLabel(project.latest_run)}</span>
+        {project.latest_run?.failure && (
+          <span className="quiet small">
+            {project.latest_run.failure.phase}: {project.latest_run.failure.code}
+          </span>
+        )}
+        {project.latest_run?.counts && (
+          <span className="quiet small">
+            {project.latest_run.counts.deliveries_acknowledged} deliveries acknowledged;{" "}
+            {project.latest_run.counts.deliveries_pending} pending
+          </span>
+        )}
+      </div>
+    </article>
+  );
+}
+
+function AgentLifecyclePanel({ tokens }: { tokens: AgentTokenSummary[] }) {
+  const queryClient = useQueryClient();
+  const lifecycle = useQuery({
+    queryKey: ["agent-lifecycle"],
+    queryFn: fetchAgentProjects,
+    retry: false,
+  });
+  const pause = useMutation({
+    mutationFn: (paused: boolean) => setAgentPause(paused),
+    onSuccess: (updated) => {
+      queryClient.setQueryData<AgentProjectsResponse>(["agent-lifecycle"], (current) =>
+        current ? { ...current, paused_until: updated.paused_until } : current,
+      );
+    },
+  });
+  const refresh = useMutation({
+    mutationFn: (connectionId: string) => refreshAgentSource(connectionId),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["agent-lifecycle"] }),
+        queryClient.invalidateQueries({ queryKey: ["agent-tokens"] }),
+      ]);
+    },
+  });
+
+  if (lifecycle.isLoading || lifecycle.error || !lifecycle.data) return null;
+  const pausedUntil =
+    lifecycle.data.paused_until ?? lifecycle.data.projects[0]?.paused_until ?? null;
+  const paused = Boolean(pausedUntil && Date.parse(pausedUntil) > Date.now());
+  const v2Connections = tokens.filter(
+    (token) =>
+      !token.revoked_at &&
+      (token.protocol_version === "v2" || token.scopes?.includes("agent-config:read")) &&
+      (!token.expires_at || Date.parse(token.expires_at) > Date.now()),
+  );
+  return (
+    <section aria-label="Agent lifecycle" className="agent-lifecycle">
+      <div className="agent-lifecycle-heading">
+        <div>
+          <h2>Agent lifecycle</h2>
+          <p className="quiet small">
+            Homing reports configuration and run state from the canonical server record.
+          </p>
+        </div>
+        <button
+          className="button"
+          disabled={pause.isPending}
+          onClick={() => pause.mutate(!paused)}
+          type="button"
+        >
+          {pause.isPending ? "Saving…" : paused ? "Resume agent" : "Pause agent for 14 days"}
+        </button>
+      </div>
+      <Message error={pause.error ?? refresh.error} />
+      <p className={`agent-pause-state ${paused ? "is-paused" : ""}`}>
+        {paused
+          ? `Paused until ${new Date(pausedUntil as string).toLocaleString()}. No local work should begin while paused.`
+          : "Running is enabled. A configuration-needed, incomplete, failed, or disconnected run is not treated as healthy."}
+      </p>
+      <div className="agent-lifecycle-projects">
+        {lifecycle.data.projects.length > 0 ? (
+          lifecycle.data.projects.map((project) => (
+            <AgentConfigurationDetails key={lifecycleProjectId(project)} project={project} />
+          ))
+        ) : (
+          <p className="quiet">No active projects are visible to this connection.</p>
+        )}
+      </div>
+      {v2Connections.length > 0 && (
+        <div className="agent-connection-identities">
+          <strong>Connection identity and source access</strong>
+          <ul>
+            {v2Connections.map((token) => (
+              <li key={token.id}>
+                <span>
+                  {token.name} · <code>{token.id}</code>
+                </span>
+                {token.source_write_expires_at &&
+                Date.parse(token.source_write_expires_at) > Date.now() ? (
+                  <span className="quiet small">
+                    Source setup access until{" "}
+                    <TokenDate value={token.source_write_expires_at} empty="unknown" />
+                  </span>
+                ) : (
+                  <button
+                    className="plain-button"
+                    disabled={refresh.isPending}
+                    onClick={() => refresh.mutate(token.id)}
+                    type="button"
+                  >
+                    Allow setup refresh
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+          <p className="quiet small">
+            Refresh grants source-configuration access briefly for attended repair; it does not
+            change the connection&apos;s identity or disclose the access key.
+          </p>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function AgentSetupPage() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -1826,6 +2052,7 @@ function AgentSetupPage() {
   const [pairCode, setPairCode] = useState("");
   const [newAccessKey, setNewAccessKey] = useState("");
   const [newAccessKeyId, setNewAccessKeyId] = useState("");
+  const [removalCopyStatus, setRemovalCopyStatus] = useState("");
   const tokens = useQuery({
     queryKey: ["agent-tokens"],
     queryFn: () => api<{ items: AgentTokenSummary[] }>("/auth/tokens"),
@@ -1947,6 +2174,7 @@ function AgentSetupPage() {
 
   return (
     <Placeholder title="Agent setup">
+      <AgentLifecyclePanel tokens={displayedActiveTokens} />
       {showSetupPrompt && (
         <section className="agent-service-entrance">
           <h2>Give your agent a secure service entrance</h2>
@@ -1968,6 +2196,10 @@ function AgentSetupPage() {
               Your agent is connected
             </h2>
             <Message error={disconnectToken.error} />
+            <p className="quiet small">
+              Disconnect revokes this Homing connection only. It cannot remove files or the
+              scheduled job on the Mac; local removal is a separate action.
+            </p>
             <div className="agent-key-table-wrap">
               <table className="agent-key-table">
                 <caption className="sr-only">Active agent access keys</caption>
@@ -2017,6 +2249,30 @@ function AgentSetupPage() {
                   ))}
                 </tbody>
               </table>
+            </div>
+            <div className="local-removal-help">
+              <strong>Remove the local installation</strong>
+              <p className="quiet small">
+                On the Mac, run the verified package&apos;s <code>python3 uninstall.py</code>{" "}
+                command. It removes only manifest-owned files and reports any residue.
+              </p>
+              <button
+                className="plain-button"
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText("python3 uninstall.py");
+                    setRemovalCopyStatus("Removal command copied.");
+                  } catch {
+                    setRemovalCopyStatus("Copy failed. Run python3 uninstall.py manually.");
+                  }
+                }}
+                type="button"
+              >
+                Copy removal command
+              </button>
+              <span className="copy-status" role="status">
+                {removalCopyStatus}
+              </span>
             </div>
           </section>
           <div className="additional-agent-setup">

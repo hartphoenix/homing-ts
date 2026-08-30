@@ -195,7 +195,92 @@ export type AgentToken = {
   project_ids: string[];
   expires_at: string;
   revoked_at: string | null;
+  protocol_version?: "v1" | "v2";
+  source_write_expires_at?: string | null;
 };
+
+export type AgentRunOutcome = {
+  id?: string;
+  status: "started" | "completed" | "incomplete" | "failed";
+  phase: "snapshot" | "acquire" | "match" | "deliver" | "finish";
+  finished_at?: string | null;
+  counts?: {
+    source_queries_total: number;
+    source_queries_attempted: number;
+    source_queries_completed: number;
+    candidates_observed: number;
+    candidates_evaluated: number;
+    candidates_kept: number;
+    candidates_insufficient: number;
+    deliveries_acknowledged: number;
+    deliveries_pending: number;
+  };
+  failure?: { phase: AgentRunOutcome["phase"]; code: string } | null;
+};
+
+export type AgentSourceQuery = {
+  id?: string;
+  adapter: "zumper-com" | "streeteasy-com";
+  revision?: number;
+  status?: "needs_review" | "ready";
+  query?: { url?: string } & Record<string, unknown>;
+};
+
+export type AgentAcquisitionBasis = {
+  locations?: string[];
+  min_price_minor?: number | null;
+  max_price_minor?: number | null;
+  housing_types?: Array<"entire" | "shared">;
+};
+
+export type AgentProject = {
+  id?: string;
+  project_id?: string;
+  name?: string;
+  slug?: string;
+  config_status?: "ready" | "needed" | "configuration_needed";
+  config_revision?: number | null;
+  config_revision_id?: number | null;
+  paused_until?: string | null;
+  required_evidence?: Array<"location" | "price" | "availability" | "housing_type">;
+  acquisition_basis?: AgentAcquisitionBasis;
+  source_queries?: AgentSourceQuery[];
+  latest_run?: AgentRunOutcome | null;
+};
+
+export type AgentProjectsResponse = {
+  projects: AgentProject[];
+  paused_until?: string | null;
+  scopes?: string[];
+};
+
+export type AgentSourceRefresh = {
+  connection_id: string;
+  scopes: string[];
+  source_write_expires_at: string | null;
+};
+
+export async function fetchAgentProjects(): Promise<AgentProjectsResponse> {
+  return api<AgentProjectsResponse>("/agent/projects");
+}
+
+export async function setAgentPause(paused: boolean): Promise<{ paused_until: string | null }> {
+  return api<{ paused_until: string | null }>("/me/agent-pause", {
+    method: "PUT",
+    mutation: true,
+    body: JSON.stringify({ paused }),
+  });
+}
+
+export async function refreshAgentSource(connectionId: string): Promise<AgentSourceRefresh> {
+  return api<AgentSourceRefresh>(
+    `/auth/tokens/${encodeURIComponent(connectionId)}/source-refresh`,
+    {
+      method: "POST",
+      mutation: true,
+    },
+  );
+}
 
 export type SourcePlanReview = {
   id: string;

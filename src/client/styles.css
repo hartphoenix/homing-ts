@@ -882,6 +882,117 @@ textarea {
   margin-top: 0;
 }
 
+.agent-lifecycle {
+  display: grid;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+  border: 1px solid var(--line);
+  border-radius: 0.8rem;
+  background: rgb(255 255 255 / 30%);
+  padding: 1rem;
+}
+
+.agent-lifecycle-heading,
+.agent-lifecycle-project-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.agent-lifecycle-heading h2,
+.agent-lifecycle-project-heading h3 {
+  margin-bottom: 0.35rem;
+}
+
+.agent-lifecycle-heading .button {
+  flex: 0 0 auto;
+}
+
+.agent-pause-state {
+  margin: 0;
+  border-radius: 0.55rem;
+  background: var(--soft);
+  padding: 0.7rem 0.85rem;
+  font-size: 0.85rem;
+}
+
+.agent-pause-state.is-paused {
+  background: #f7e7ce;
+}
+
+.agent-lifecycle-projects {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.agent-lifecycle-project {
+  border-top: 1px solid var(--line);
+  padding-top: 0.9rem;
+}
+
+.agent-lifecycle-project-heading h3 {
+  font-size: 1.25rem;
+}
+
+.agent-lifecycle-project .pill.is-ready {
+  background: #e4eadf;
+}
+
+.agent-lifecycle-project .pill.is-needed {
+  background: #f7e7ce;
+  color: #76561e;
+}
+
+.agent-lifecycle-details {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  margin-top: 0.8rem;
+  font-size: 0.82rem;
+}
+
+.agent-lifecycle-details ul,
+.agent-connection-identities ul {
+  margin: 0.4rem 0 0;
+  padding-left: 1.1rem;
+}
+
+.agent-lifecycle-run,
+.agent-connection-identities {
+  display: grid;
+  gap: 0.35rem;
+  border-top: 1px solid var(--line);
+  padding-top: 0.8rem;
+  font-size: 0.82rem;
+}
+
+.agent-connection-identities li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.25rem 0;
+}
+
+.agent-connection-identities code {
+  overflow-wrap: anywhere;
+  font-size: 0.75rem;
+}
+
+.local-removal-help {
+  display: grid;
+  gap: 0.35rem;
+  border-top: 1px solid var(--line);
+  margin-top: 1rem;
+  padding-top: 1rem;
+}
+
+.local-removal-help p {
+  margin-bottom: 0;
+}
+
 .pairing-codes {
   margin-top: 1.5rem;
   border-top: 1px solid var(--line);
@@ -1625,6 +1736,17 @@ textarea {
   .lead-pagination {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .agent-lifecycle-heading,
+  .agent-lifecycle-project-heading,
+  .agent-lifecycle-details {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .agent-lifecycle-heading .button {
+    width: 100%;
   }
 }
 
