@@ -25,12 +25,15 @@ Rehearse the exact release against an isolated project and database. Run the exp
 compact policy suite, real Python v2 client, package/archive verifier, browser smoke, backup, and
 isolated restore. The rehearsal must also exercise web rollback to the prior TypeScript image.
 
-The final qualification candidate is commit `bff8d37`: local `bun run check` passed with 117 active
-tests and 18 PostgreSQL-gated skips, and an isolated deployment-host rehearsal using disposable
-PostgreSQL 17 and the pinned production Dockerfile build applied migrations twice and passed all
-18 PostgreSQL integration tests. The production database and service were untouched. Harness
-runtime/container failures were resolved; this is not a claim of physical native-macOS
-install/wake coverage or a production canary.
+The final qualification candidate is commit `ff06377`: local `bun run check` passed with 124 active
+tests and 20 PostgreSQL-gated skips; the committed Python package suite passed 7/7 and the
+agentation suite passed 22/22 Chromium UI tests. An isolated deployment-host rehearsal using
+disposable PostgreSQL 17 and the pinned production Dockerfile build applied migrations twice and
+passed all 20 PostgreSQL integration tests. The production database and service were untouched;
+package/server adversarial blockers were fixed and obsolete local rollback was removed. The code
+is ready to deploy. A physical native-macOS install/wake test and production canary remain
+post-deploy/manual gates: they do not block deployment readiness, but they block declaring rollout
+proven.
 
 ## Controlled release
 

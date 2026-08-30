@@ -69,18 +69,21 @@ Completed local evidence:
 - Focused server, client, browser, typecheck, lint, and generated API checks passed on the port
   commits.
 
-## Final qualification record — commit `bff8d37`
+## Final qualification record — commit `ff06377`
 
-- Local `bun run check` passed with 117 active tests and 18 PostgreSQL-gated skips; build,
+- Local `bun run check` passed with 124 active tests and 20 PostgreSQL-gated skips; build,
   typecheck, lint, and generated API checks passed.
+- The committed Python package suite passed 7/7 tests.
 - `bun run test:agentation` passed 22/22 Chromium UI tests, including the v2 lifecycle-state test.
 - An isolated deployment-host rehearsal used disposable PostgreSQL 17 and the pinned production
-  Dockerfile build, applied migrations twice, and passed all 18 PostgreSQL integration tests.
-- The production database and service were untouched. Initial harness runtime/container failures
-  were resolved and do not support product-level failure claims.
+  Dockerfile build, applied migrations twice, and passed all 20 PostgreSQL integration tests.
+- The production database and service were untouched. Package/server adversarial blockers were
+  fixed, obsolete local rollback was removed, and initial harness runtime/container failures were
+  resolved without product-level failure claims.
 
 Qualification blockers and non-claims:
 
-- Native-Mac branches not explicitly exercised remain unqualified: this record does not claim a
-  physical macOS install or wake test, or a production canary. The disabled and archived
-  `com.homing.backup` LaunchAgent is not treated as a running or protected schedule.
+- Native-Mac branches not explicitly exercised remain unqualified: a physical macOS install or
+  wake test and the production canary remain post-deploy/manual gates. They do not block code being
+  ready to deploy, but they do block declaring the production rollout proven. The disabled and
+  archived `com.homing.backup` LaunchAgent is not treated as a running or protected schedule.
