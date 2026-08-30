@@ -334,6 +334,47 @@ describePostgres("PostgreSQL concurrency invariants", () => {
     ).rejects.toMatchObject({ code: "validation_error", status: 422 });
   });
 
+  it("rejects v2 replay and finalization after membership removal", async () => {
+    const snapshot = await createV2Snapshot();
+    const input: CreateRunInput = {
+      userId: 1,
+      tokenId: tokenOne,
+      invocationId: "abababab-abab-4aba-8aba-abababababab",
+      agentLabel: "postgres/v2-revoked-member",
+      projects: [snapshot],
+    };
+    const created = await v2.createRun(input);
+    await collaboration.transaction(async (transaction) => {
+      await transaction.changeMembershipRole(projectId, 1, "editor", 2);
+      await transaction.removeMembershipSafely(projectId, 1, 2);
+    });
+    await expect(v2.createRun(input)).rejects.toMatchObject({ code: "not_found", status: 404 });
+
+    const [snapshotQuery] = snapshot.queries;
+    if (!snapshotQuery) throw new Error("v2 snapshot must include a source query");
+    await expect(
+      v2.finalizeRun(1, tokenOne, created.run.id, {
+        status: "completed",
+        phase: "finish",
+        queries: [
+          { source_query_revision_id: snapshotQuery.sourceQueryRevisionId, status: "completed" },
+        ],
+        counts: {
+          source_queries_total: 1,
+          source_queries_attempted: 1,
+          source_queries_completed: 1,
+          candidates_observed: 0,
+          candidates_evaluated: 0,
+          candidates_kept: 0,
+          candidates_insufficient: 0,
+          deliveries_acknowledged: 0,
+          deliveries_pending: 0,
+        },
+        failure: null,
+      }),
+    ).rejects.toMatchObject({ code: "not_found", status: 404 });
+  });
+
   it("resolves concurrent source-query creation without a unique-race error", async () => {
     const acquisitionBasis = { locations: ["Brooklyn"] };
     const sourceQuery = { url: "https://www.zumper.com/homes/brooklyn" };

@@ -283,6 +283,18 @@ async function assertMembership(
   return project as Row;
 }
 
+async function assertActiveMemberships(
+  db: Database,
+  userId: number,
+  projectsToCheck: readonly Pick<RunSnapshotProject, "projectId">[],
+): Promise<void> {
+  for (const project of [...projectsToCheck].sort((left, right) =>
+    left.projectId.localeCompare(right.projectId),
+  )) {
+    await assertMembership(db, userId, project.projectId, true);
+  }
+}
+
 function queryInputEqual(row: Row, input: ConfigSourceQueryInput): boolean {
   return (
     String(row.canonicalSha256) === input.canonicalSha256 &&
@@ -708,6 +720,11 @@ export class PostgresV2Repository implements V2Repository {
         if (existing.agentLabel !== input.agentLabel) {
           conflict("The invocation ID was already used with a different request.");
         }
+        await assertActiveMemberships(
+          transaction as unknown as Database,
+          input.userId,
+          input.projects,
+        );
         if (
           !(await runSnapshotMatches(
             transaction as unknown as Database,
@@ -722,13 +739,12 @@ export class PostgresV2Repository implements V2Repository {
           replayed: true,
         };
       }
+      await assertActiveMemberships(
+        transaction as unknown as Database,
+        input.userId,
+        input.projects,
+      );
       for (const project of input.projects) {
-        await assertMembership(
-          transaction as unknown as Database,
-          input.userId,
-          project.projectId,
-          true,
-        );
         const [config] = await transaction
           .select({
             id: promptRevisions.id,
@@ -859,6 +875,7 @@ export class PostgresV2Repository implements V2Repository {
       const row = rows[0];
       if (!row) notFound();
       const current = await mapRun(transaction as unknown as Database, row as Row);
+      await assertActiveMemberships(transaction as unknown as Database, userId, current.projects);
       if (current.status !== "started") {
         if (
           !current.report ||
