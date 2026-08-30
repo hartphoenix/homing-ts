@@ -235,11 +235,17 @@ def normalize_snapshot(
     projects: list[Dict[str, Any]],
 ) -> tuple[list[Dict[str, Any]], Dict[str, Dict[str, Any]]]:
     refs, projects_by_id = [], {}
+    project_ids = set()
+    query_ids = set()
     for project in projects:
+        if not isinstance(project, dict):
+            raise HomingError("malformed", "Project snapshot contains a non-object")
         project_id = str(project.get("project_id", ""))
+        queries = project.get("source_queries")
+        if project.get("config_status") in {"needed", "configuration_needed"} or queries == []:
+            raise HomingError("configuration_needed", "Project needs configuration")
         revision = str(project.get("current_config_revision", ""))
         digest = project.get("config_sha256")
-        queries = project.get("source_queries")
         if (
             not project_id
             or not revision
@@ -251,9 +257,14 @@ def normalize_snapshot(
             raise HomingError(
                 "configuration", "Project must have between one and eight configured source queries"
             )
+        if project_id in project_ids:
+            raise HomingError("malformed", "Project snapshot contains a duplicate project")
+        project_ids.add(project_id)
         projects_by_id[project_id] = project
         adapter_counts: Dict[str, int] = {}
         for query in queries:
+            if not isinstance(query, dict):
+                raise HomingError("malformed", "Source snapshot contains a non-object query")
             if query.get("status") == "needs_review":
                 raise HomingError("configuration", "A configured source needs review")
             adapter = query.get("adapter")
@@ -264,12 +275,16 @@ def normalize_snapshot(
                 raise HomingError(
                     "configuration", "Project has more than four queries for one adapter"
                 )
+            query_id = str(query.get("id", ""))
+            if query_id in query_ids:
+                raise HomingError("malformed", "Project snapshot contains a duplicate query")
+            query_ids.add(query_id)
             refs.append(
                 {
                     "project_id": project_id,
                     "prompt_revision": revision,
                     "prompt_hash": digest,
-                    "query_id": str(query.get("id", "")),
+                    "query_id": query_id,
                     "query_revision": str(query.get("revision", query.get("id", ""))),
                     "query_hash": query.get("sha256", ""),
                     "adapter": adapter,
@@ -333,6 +348,9 @@ def reconcile_reports(
                         "sha256": query["query_hash"],
                     }
                 )
+            if not grouped:
+                state.acknowledge_report(row["id"])
+                continue
             server_id = client.create_run(row["id"], list(grouped.values()))
             state.set_server_id(row["id"], server_id)
         client.finish_run(server_id, json.loads(row["report_body"]))
@@ -369,6 +387,8 @@ def run_once(
             return {"status": "paused"}
         if exc.kind in {"authentication", "permission"}:
             return {"status": "disconnected"}
+        if exc.kind == "configuration_needed":
+            return {"status": "configuration_needed"}
         if exc.retryable:
             return {"status": "unavailable"}
         started = (

@@ -128,7 +128,14 @@ class State:
                     )
             return True
         except sqlite3.IntegrityError:
-            return False
+            if mode == "scheduled" and due_date is not None:
+                existing = self.db.execute(
+                    "SELECT 1 FROM runs WHERE mode='scheduled' AND due_date=? LIMIT 1",
+                    (due_date,),
+                ).fetchone()
+                if existing is not None:
+                    return False
+            raise
 
     def recovery_candidate(self, due_date: str) -> Optional[sqlite3.Row]:
         """Return the same-day invocation that may continue before acquisition began or after a crash."""

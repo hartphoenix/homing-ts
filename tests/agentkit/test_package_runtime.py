@@ -1,5 +1,6 @@
 import json
 import plistlib
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -10,7 +11,7 @@ from types import SimpleNamespace
 
 from agentkit.package.homing import HomingClient, HomingError, Response, _pause_is_active
 from agentkit.package.install import CLAUDE_ARGV_TEMPLATE, LABEL, InstallPaths, _mark, launch_agent_bytes
-from agentkit.package.runner import reconcile_reports, run_once
+from agentkit.package.runner import normalize_snapshot, reconcile_reports, run_once
 from agentkit.package.schedule import scheduled_due
 from agentkit.package.state import State
 from agentkit.package.uninstall import uninstall
@@ -91,6 +92,90 @@ class FailingMatcher:
 
 
 class PackageRuntimeTests(unittest.TestCase):
+    def test_configuration_needed_does_not_create_a_local_run(self):
+        project = {
+            "project_id": str(uuid.uuid4()),
+            "config_status": "needed",
+            "current_config_revision": None,
+            "config_sha256": None,
+            "source_queries": [],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            state = State(Path(directory) / "state.sqlite3")
+            result = run_once(
+                state,
+                FakeClient([project]),
+                "manual",
+            )
+            self.assertEqual(result, {"status": "configuration_needed"})
+            self.assertEqual(state.db.execute("SELECT count(*) FROM runs").fetchone()[0], 0)
+            state.close()
+
+    def test_local_zero_query_failure_is_not_submitted_or_left_pending(self):
+        class Client:
+            def __init__(self):
+                self.created = False
+
+            def projects(self):
+                return []
+
+            def create_run(self, invocation, projects):
+                self.created = True
+                raise AssertionError("zero-query local report must not be submitted")
+
+        with tempfile.TemporaryDirectory() as directory:
+            state = State(Path(directory) / "state.sqlite3")
+            state.start_run("local-only", "manual", None, [])
+            state.fail_run("local-only", "configuration")
+            state.freeze_report("local-only")
+            client = Client()
+            reconcile_reports(state, client)
+            self.assertFalse(client.created)
+            self.assertEqual(
+                state.db.execute(
+                    "SELECT server_report FROM runs WHERE id='local-only'"
+                ).fetchone()[0],
+                "acknowledged",
+            )
+            state.close()
+
+    def test_duplicate_snapshot_identities_are_rejected_before_state(self):
+        _, projects = project_snapshot()
+        projects[0]["source_queries"].append(dict(projects[0]["source_queries"][0]))
+        with self.assertRaisesRegex(HomingError, "duplicate query"):
+            normalize_snapshot(projects)
+        _, duplicate_project = project_snapshot()
+        duplicate_projects = [duplicate_project[0], dict(duplicate_project[0])]
+        duplicate_projects[1]["source_queries"] = [dict(duplicate_project[0]["source_queries"][0])]
+        with self.assertRaisesRegex(HomingError, "duplicate project"):
+            normalize_snapshot(duplicate_projects)
+
+    def test_start_run_does_not_translate_arbitrary_integrity_errors(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = State(Path(directory) / "state.sqlite3")
+            self.assertTrue(state.start_run("scheduled-one", "scheduled", "2026-08-29", []))
+            self.assertFalse(state.start_run("scheduled-two", "scheduled", "2026-08-29", []))
+            with self.assertRaises(sqlite3.IntegrityError):
+                state.start_run(
+                    "bad-ref",
+                    "manual",
+                    None,
+                    [
+                        {
+                            "project_id": "project",
+                            "prompt_revision": "1",
+                            "prompt_hash": "a" * 64,
+                            "query_id": "query",
+                            "query_revision": "1",
+                            "query_hash": None,
+                            "adapter": "zumper-com",
+                            "validator_version": "v2-wire-1",
+                        }
+                    ],
+                )
+            self.assertEqual(state.db.execute("SELECT count(*) FROM runs").fetchone()[0], 1)
+            state.close()
+
     def test_matcher_failure_is_reported_on_the_source_query(self):
         query_id, projects = project_snapshot()
         with tempfile.TemporaryDirectory() as directory:
