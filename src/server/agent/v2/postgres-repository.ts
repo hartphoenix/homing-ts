@@ -958,7 +958,7 @@ export class PostgresV2Repository implements V2Repository {
         .limit(1)
         .for("update");
       let leadId = existingLeadRows[0]?.id;
-      const status: DeliverResult["status"] = leadId ? "existing" : "created";
+      let status: DeliverResult["status"] = leadId ? "existing" : "created";
       if (!leadId) {
         const [created] = await transaction
           .insert(leads)
@@ -1006,6 +1006,7 @@ export class PostgresV2Repository implements V2Repository {
             .for("update");
           if (!racedLead) throw new Error("lead insert disappeared during delivery");
           leadId = racedLead.id;
+          status = "existing";
         }
       }
       const observations = await transaction
