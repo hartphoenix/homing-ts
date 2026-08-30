@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  type AnyPgColumn,
   bigint,
   bigserial,
   boolean,
@@ -218,7 +219,10 @@ export const projects = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: "restrict" }),
     promptRevision: integer("prompt_revision").notNull().default(0),
-    currentConfigRevisionId: bigint("current_config_revision_id", { mode: "number" }),
+    currentConfigRevisionId: bigint("current_config_revision_id", { mode: "number" }).references(
+      (): AnyPgColumn => promptRevisions.id,
+      { onDelete: "set null" },
+    ),
     latestChangeSequence: bigint("latest_change_sequence", { mode: "number" }).notNull().default(0),
     feedEpoch: varchar("feed_epoch", { length: 64 }).notNull(),
     ...timestamps,
@@ -231,7 +235,7 @@ export const projectMemberships = pgTable(
   {
     projectId: uuid("project_id")
       .notNull()
-      .references(() => projects.id, { onDelete: "cascade" }),
+      .references((): AnyPgColumn => projects.id, { onDelete: "cascade" }),
     userId: bigint("user_id", { mode: "number" })
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),

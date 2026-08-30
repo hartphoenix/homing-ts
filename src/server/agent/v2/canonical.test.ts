@@ -10,6 +10,18 @@ import {
 } from "./canonical";
 
 describe("v2 canonical JSON", () => {
+  it("orders normalized keys by Unicode code point like the Python client", () => {
+    const astralKey = String.fromCodePoint(0x10000);
+    const bmpKey = String.fromCodePoint(0xe000);
+    const decomposedKey = "e\u0301";
+    const composedKey = "é";
+
+    expect(canonicalizeJson({ [astralKey]: 1, [bmpKey]: 2 })).toBe(
+      `{"${bmpKey}":2,"${astralKey}":1}`,
+    );
+    expect(canonicalizeJson({ [decomposedKey]: 1, [composedKey]: 2 })).toBe('{"é":2}');
+  });
+
   it.each([
     [{ b: 2, a: 1 }, '{"a":1,"b":2}'],
     [

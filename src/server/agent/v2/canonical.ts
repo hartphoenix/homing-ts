@@ -59,10 +59,23 @@ function encode(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map((item) => encode(item)).join(",")}]`;
   if (!isRecord(value)) throw new CanonicalJsonError("Canonical JSON accepts plain objects only");
 
-  const entries = Object.keys(value)
-    .sort()
-    .map((key) => `${quote(key)}:${encode(value[key])}`);
+  const normalizedEntries = new Map<string, unknown>();
+  for (const key of Object.keys(value)) normalizedEntries.set(key.normalize("NFC"), value[key]);
+  const entries = [...normalizedEntries.entries()]
+    .sort(([left], [right]) => compareCodePoints(left, right))
+    .map(([key, item]) => `${quote(key)}:${encode(item)}`);
   return `{${entries.join(",")}}`;
+}
+
+function compareCodePoints(left: string, right: string): number {
+  const leftCodePoints = Array.from(left, (character) => character.codePointAt(0) ?? 0);
+  const rightCodePoints = Array.from(right, (character) => character.codePointAt(0) ?? 0);
+  const length = Math.min(leftCodePoints.length, rightCodePoints.length);
+  for (let index = 0; index < length; index += 1) {
+    const difference = (leftCodePoints[index] ?? 0) - (rightCodePoints[index] ?? 0);
+    if (difference !== 0) return difference;
+  }
+  return leftCodePoints.length - rightCodePoints.length;
 }
 
 /** Serializes v2 JSON with sorted object keys, NFC strings, and no insignificant whitespace. */

@@ -2325,6 +2325,19 @@
           ],
           "onDelete": "restrict",
           "onUpdate": "no action"
+        },
+        "projects_current_config_revision_id_prompt_revisions_id_fk": {
+          "name": "projects_current_config_revision_id_prompt_revisions_id_fk",
+          "tableFrom": "projects",
+          "tableTo": "prompt_revisions",
+          "columnsFrom": [
+            "current_config_revision_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
