@@ -542,28 +542,21 @@ describe("public agent kit", () => {
   it("builds deterministic substituted bytes and serves the complete allowlist contract", async () => {
     const first = buildKitPackage("https://homing.test");
     const second = buildKitPackage("https://homing.test");
-    expect(first.version).toBe(4);
+    expect(first.version).toBe(2);
 
-    const setup = readFileSync("agentkit/package/SKILL.md", "utf8");
-    const phase2 = setup.indexOf("## Phase 2");
-    const phase3 = setup.indexOf("## Phase 3");
-    const phase4 = setup.indexOf("## Phase 4");
-    const phase7 = setup.indexOf("## Phase 7");
-    expect(phase2).toBeGreaterThan(-1);
-    expect(phase3).toBeGreaterThan(phase2);
-    expect(phase4).toBeGreaterThan(phase3);
-    expect(phase7).toBeGreaterThan(phase4);
-    expect(setup.slice(phase2, phase3)).toContain("homing.py pair-request");
-    expect(setup.slice(phase2, phase3)).not.toContain("install.py");
+    const setup = readFileSync("agentkit/package/SETUP.md", "utf8");
+    expect(setup).not.toMatch(/^---/);
+    expect(setup).toContain("finalize-setup");
+    expect(setup).toContain("finalize-setup --workspace");
+    expect(setup).not.toContain("v1");
 
-    const installer = readFileSync("agentkit/package/scripts/install.py", "utf8");
-    expect(installer).toContain("capabilities.json");
-    expect(installer).toContain('"needs_setup": needs_setup');
-    expect(installer).not.toContain("paused in Homing");
-    expect(installer).not.toContain('payload.get("paused")');
-    expect(readFileSync("agentkit/package/scripts/homing.py", "utf8")).not.toContain(
-      "paused_until",
+    const installer = readFileSync("agentkit/package/install.py", "utf8");
+    expect(installer).toContain("SETUP_WORKSPACE_MARKER");
+    expect(installer).toContain("finalize_setup_workspace");
+    expect(readFileSync("agentkit/package/selftest.py", "utf8")).toContain(
+      "_paused_ledger_snapshot",
     );
+    expect(readFileSync("agentkit/package/homing.py", "utf8")).toContain("agent_paused_until");
     expect(first.archiveBytes).toEqual(second.archiveBytes);
     expect(first.archiveBytes.byteLength).toBeLessThanOrEqual(256 * 1024);
     expect(
@@ -593,9 +586,7 @@ describe("public agent kit", () => {
       bytes: first.archiveBytes.byteLength,
       sha256: createHash("sha256").update(first.archiveBytes).digest("hex"),
     });
-    expect(readFileSync("agentkit/package/scripts/homing.py", "utf8")).toContain(
-      "__HOMING_ORIGIN__",
-    );
+    expect(readFileSync("agentkit/package/homing.py", "utf8")).toContain("__HOMING_ORIGIN__");
     const zipEntries = centralDirectory(first.archiveBytes);
     expect(zipEntries.map((entry) => entry.name)).toEqual(
       first.manifest.files.map((entry) => entry.path),
@@ -611,42 +602,49 @@ describe("public agent kit", () => {
     }
 
     const app = testApp({ kit: first });
-    const skill = await app.request("/agent/pkg/SKILL.md");
-    expect(skill.status).toBe(200);
-    expect(skill.headers.get("content-type")).toContain("text/markdown");
-    expect(skill.headers.get("cache-control")).toBe("public, max-age=300");
-    expect(skill.headers.get("content-disposition")).toBeNull();
-    const etag = skill.headers.get("etag") as string;
+    const setupDocument = await app.request("/agent/pkg/SETUP.md");
+    expect(setupDocument.status).toBe(200);
+    expect(setupDocument.headers.get("content-type")).toContain("text/markdown");
+    expect(setupDocument.headers.get("cache-control")).toBe("public, max-age=300");
+    expect(setupDocument.headers.get("content-disposition")).toBeNull();
+    const etag = setupDocument.headers.get("etag") as string;
     expect(etag).toMatch(/^"[0-9a-f]{64}"$/);
 
-    const notModified = await app.request("/agent/pkg/SKILL.md", {
+    const notModified = await app.request("/agent/pkg/SETUP.md", {
       headers: { "If-None-Match": `"other", W/${etag}` },
     });
     expect(notModified.status).toBe(304);
     expect(await notModified.text()).toBe("");
-    const star = await app.request("/agent/pkg/SKILL.md", {
+    const star = await app.request("/agent/pkg/SETUP.md", {
       headers: { "If-None-Match": "*" },
     });
     expect(star.status).toBe(304);
     expect(star.headers.get("etag")).toBe(etag);
     expect(star.headers.get("cache-control")).toBe("public, max-age=300");
-    const head = await app.request("/agent/pkg/SKILL.md", { method: "HEAD" });
+    const head = await app.request("/agent/pkg/SETUP.md", { method: "HEAD" });
     expect(head.status).toBe(200);
     expect(await head.text()).toBe("");
+
+    const legacySetup = await app.request("/agent/pkg/SKILL.md");
+    expect(legacySetup.status).toBe(301);
+    expect(legacySetup.headers.get("location")).toBe("/agent/pkg/SETUP.md");
+    const adapter = await app.request("/agent/pkg/adapters/shared.py");
+    expect(adapter.status).toBe(200);
+    expect((await app.request("/agent/pkg/homing-check/SKILL.md")).status).toBe(200);
 
     for (const path of [
       "/agent/pkg/unknown.md",
       "/agent/pkg/references/nested/nope.md",
       "/agent/pkg/scripts/../../package.json",
-      "/agent/pkg/scripts/%2e%2e/%2e%2e/package.json",
+      "/agent/pkg/adapters/%2e%2e/%2e%2e/package.json",
       `/agent/pkg/homing-agent-kit-${first.version + 1}.zip`,
     ]) {
       expect((await app.request(path)).status).toBe(404);
     }
-    expect((await app.request("/agent/pkg/scripts/../SKILL.md")).status).toBe(200);
+    expect((await app.request("/agent/pkg/adapters/../SETUP.md")).status).toBe(200);
     expect(
       (
-        await app.request("/agent/pkg/SKILL.md", {
+        await app.request("/agent/pkg/SETUP.md", {
           method: "POST",
         })
       ).status,
