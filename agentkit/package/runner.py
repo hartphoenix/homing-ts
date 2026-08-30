@@ -300,7 +300,13 @@ def snapshot_wire(projects: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
     ]
 
 
-def reconcile_reports(state: State, client: Any) -> None:
+def reconcile_reports(
+    state: State,
+    client: Any,
+    projects_snapshot: Optional[list[Dict[str, Any]]] = None,
+) -> None:
+    if projects_snapshot is None:
+        client.projects()
     state.interrupt_open_runs()
     for row in state.unfinished_reports():
         if not row["report_body"]:
@@ -676,7 +682,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                         matcher=MatchSubprocessPort(runtime, claude_executable),
                     )
             else:
-                reconcile_reports(state, client)
+                reconcile_reports(state, client, projects_snapshot=projects)
                 result = run_once(
                     state,
                     client,

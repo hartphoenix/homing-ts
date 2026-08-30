@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 from agentkit.package.homing import HomingClient, HomingError, Response, _pause_is_active
 from agentkit.package.install import CLAUDE_ARGV_TEMPLATE, LABEL, InstallPaths, _mark, launch_agent_bytes
-from agentkit.package.runner import run_once
+from agentkit.package.runner import reconcile_reports, run_once
 from agentkit.package.schedule import scheduled_due
 from agentkit.package.state import State
 from agentkit.package.uninstall import uninstall
@@ -150,6 +150,20 @@ class PackageRuntimeTests(unittest.TestCase):
                 self.assertEqual(run_once(state, Client(kind), "manual"), {"status": expected})
                 self.assertEqual(state.db.execute("SELECT count(*) FROM runs").fetchone()[0], 0)
                 state.close()
+
+    def test_reconciliation_preflights_before_interrupting_local_work(self):
+        class Disconnected:
+            def projects(self):
+                raise HomingError("authentication", "disconnected")
+
+        with tempfile.TemporaryDirectory() as directory:
+            state = State(Path(directory) / "state.sqlite3")
+            state.start_run("open", "manual", None, [])
+            with self.assertRaises(HomingError):
+                reconcile_reports(state, Disconnected())
+            row = state.db.execute("SELECT outcome,error_class FROM runs").fetchone()
+            self.assertEqual(tuple(row), (None, None))
+            state.close()
 
     def test_expired_pause_is_not_treated_as_active(self):
         now = datetime.now(timezone.utc)
