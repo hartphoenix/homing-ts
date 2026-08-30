@@ -25,6 +25,13 @@ Rehearse the exact release against an isolated project and database. Run the exp
 compact policy suite, real Python v2 client, package/archive verifier, browser smoke, backup, and
 isolated restore. The rehearsal must also exercise web rollback to the prior TypeScript image.
 
+The final qualification candidate is commit `bff8d37`: local `bun run check` passed with 117 active
+tests and 18 PostgreSQL-gated skips, and an isolated deployment-host rehearsal using disposable
+PostgreSQL 17 and the pinned production Dockerfile build applied migrations twice and passed all
+18 PostgreSQL integration tests. The production database and service were untouched. Harness
+runtime/container failures were resolved; this is not a claim of physical native-macOS
+install/wake coverage or a production canary.
+
 ## Controlled release
 
 1. Freeze the release commit, current image digest, schema checksum, served package digest, backup

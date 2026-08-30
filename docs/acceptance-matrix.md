@@ -8,6 +8,14 @@ The former `com.homing.backup` LaunchAgent is disabled and archived. It is not a
 gate or protected schedule; backup qualification uses the documented manual command and an
 explicitly recorded artifact.
 
+Final qualification for commit `bff8d37` passed the local `bun run check` with 117 active tests
+and 18 PostgreSQL-gated skips; build, typecheck, lint, and generated API checks were green. An
+isolated deployment-host rehearsal used disposable PostgreSQL 17 and the pinned production
+Dockerfile build, applied migrations twice, and passed all 18 PostgreSQL integration tests. The
+production database and service were untouched. The agentation suite passed 22/22 Chromium UI
+tests, including the v2 lifecycle-state test. This record does not claim a physical native macOS
+install or wake test, or a production canary.
+
 ## Contract and canonical state
 
 1. The normative order names the reviewed v2 contract first; v1 is rollback evidence only.

@@ -69,10 +69,18 @@ Completed local evidence:
 - Focused server, client, browser, typecheck, lint, and generated API checks passed on the port
   commits.
 
+## Final qualification record — commit `bff8d37`
+
+- Local `bun run check` passed with 117 active tests and 18 PostgreSQL-gated skips; build,
+  typecheck, lint, and generated API checks passed.
+- `bun run test:agentation` passed 22/22 Chromium UI tests, including the v2 lifecycle-state test.
+- An isolated deployment-host rehearsal used disposable PostgreSQL 17 and the pinned production
+  Dockerfile build, applied migrations twice, and passed all 18 PostgreSQL integration tests.
+- The production database and service were untouched. Initial harness runtime/container failures
+  were resolved and do not support product-level failure claims.
+
 Qualification blockers and non-claims:
 
-- Docker/PostgreSQL qualification is blocked locally because no Docker daemon or native PostgreSQL
-  client is available. The PostgreSQL migration, restore, and full integration gates are not
-  marked passed.
-- Native-Mac branches not explicitly exercised remain unqualified. The disabled and archived
+- Native-Mac branches not explicitly exercised remain unqualified: this record does not claim a
+  physical macOS install or wake test, or a production canary. The disabled and archived
   `com.homing.backup` LaunchAgent is not treated as a running or protected schedule.
