@@ -15,7 +15,7 @@ import { canonicalJsonBytes, canonicalJsonSha256 } from "../../src/server/agent/
 import { sourceQueryIdentity } from "../../src/server/agent/v2/identities";
 import { PostgresV2Repository } from "../../src/server/agent/v2/postgres-repository";
 import type { CreateRunInput, RunSnapshotProject } from "../../src/server/agent/v2/repository";
-import type { RequiredEvidenceKey } from "../../src/server/agent/v2/schemas";
+import type { AgentRunReport, RequiredEvidenceKey } from "../../src/server/agent/v2/schemas";
 import { DrizzleAuthRepository } from "../../src/server/auth/drizzle-repository";
 import { verifyImportedPassword } from "../../src/server/auth/password";
 import { PostgresCollaborationRepository } from "../../src/server/collaboration/postgres-repository";
@@ -248,6 +248,90 @@ describePostgres("PostgreSQL concurrency invariants", () => {
     expect(new Set(results.map((result) => result.run.id)).size).toBe(1);
     expect(results.filter((result) => !result.replayed)).toHaveLength(1);
     expect(results.filter((result) => result.replayed)).toHaveLength(7);
+  });
+
+  it("serializes v2 run creation behind project removal", async () => {
+    const snapshot = await createV2Snapshot();
+    const input: CreateRunInput = {
+      userId: 1,
+      tokenId: tokenOne,
+      invocationId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+      agentLabel: "postgres/v2-removal-race",
+      projects: [snapshot],
+    };
+    let releaseTrash!: () => void;
+    let trashLocked!: () => void;
+    const trashReady = new Promise<void>((resolve) => {
+      trashLocked = resolve;
+    });
+    const trashRelease = new Promise<void>((resolve) => {
+      releaseTrash = resolve;
+    });
+    const trash = collaboration.transaction(async (transaction) => {
+      await transaction.assertOwner(projectId, 1);
+      trashLocked();
+      await trashRelease;
+      await transaction.updateProject(projectId, { status: "trashed" });
+    });
+    await trashReady;
+    const creating = v2.createRun(input);
+    await delay(25);
+    releaseTrash();
+    await trash;
+    await expect(creating).rejects.toMatchObject({ code: "not_found", status: 404 });
+    const [runCount] = await sqlClient`
+      select count(*)::text as count from agent_runs where invocation_id = ${input.invocationId}
+    `;
+    expect(runCount?.count).toBe("0");
+    await collaboration.updateProject(projectId, { status: "active" });
+  });
+
+  it("replays a normalized terminal report and rejects started finalization", async () => {
+    const snapshot = await createV2Snapshot();
+    const input: CreateRunInput = {
+      userId: 1,
+      tokenId: tokenOne,
+      invocationId: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+      agentLabel: "postgres/v2-finalize-replay",
+      projects: [snapshot],
+    };
+    const created = await v2.createRun(input);
+    const [snapshotQuery] = snapshot.queries;
+    if (!snapshotQuery) throw new Error("v2 snapshot must include a source query");
+    const report: AgentRunReport = {
+      status: "completed",
+      phase: "finish",
+      queries: [
+        {
+          source_query_revision_id: snapshotQuery.sourceQueryRevisionId,
+          status: "completed",
+        },
+      ],
+      counts: {
+        source_queries_total: 1,
+        source_queries_attempted: 1,
+        source_queries_completed: 1,
+        candidates_observed: 0,
+        candidates_evaluated: 0,
+        candidates_kept: 0,
+        candidates_insufficient: 0,
+        deliveries_acknowledged: 0,
+        deliveries_pending: 0,
+      },
+      failure: null,
+    };
+    const first = await v2.finalizeRun(1, tokenOne, created.run.id, report);
+    expect(first.replayed).toBe(false);
+    const [reportQuery] = report.queries;
+    if (!reportQuery) throw new Error("run report must include a source query");
+    const replay = await v2.finalizeRun(1, tokenOne, created.run.id, {
+      ...report,
+      queries: [{ ...reportQuery, error_class: null }],
+    });
+    expect(replay.replayed).toBe(true);
+    await expect(
+      v2.finalizeRun(1, tokenOne, created.run.id, { ...report, status: "started" }),
+    ).rejects.toMatchObject({ code: "validation_error", status: 422 });
   });
 
   it("resolves concurrent source-query creation without a unique-race error", async () => {
@@ -563,6 +647,19 @@ describePostgres("PostgreSQL concurrency invariants", () => {
     `;
     expect(reviewConfig?.config_status).toBe("needs_review");
     expect(reviewSources).toEqual([{ status: "needs_review" }]);
+
+    const reverted = await collaboration.transaction((transaction) =>
+      transaction.updatePrompt(projectId, 4, "Find a place with transit", { city: "Brooklyn" }, 1),
+    );
+    expect(reverted.revision.revision).toBe(5);
+    const [revertedSource] = await sqlClient`
+      select source.id, source.status
+        from prompt_revision_source_queries link
+        join source_query_revisions source on source.id = link.source_query_revision_id
+       where link.project_id = ${projectId}
+         and link.prompt_revision_id = ${reverted.revision.id}
+    `;
+    expect(revertedSource).toEqual({ id: source?.id, status: "ready" });
   });
 
   it("linearizes membership revocation before a content authorization check", async () => {

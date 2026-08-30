@@ -572,37 +572,74 @@ export class PostgresCollaborationRepository implements CollaborationRepository 
       if (acquisitionChanged) {
         const nextBasisHash = canonicalJsonSha256(nextAcquisitionBasis);
         for (const source of currentQueries) {
-          const [latest] = await this.db
-            .select({ revision: sql<number>`coalesce(max(${sourceQueryRevisions.revision}), 0)` })
+          const [existing] = await this.db
+            .select({
+              id: sourceQueryRevisions.id,
+              revision: sourceQueryRevisions.revision,
+              canonicalSha256: sourceQueryRevisions.canonicalSha256,
+              status: sourceQueryRevisions.status,
+            })
             .from(sourceQueryRevisions)
             .where(
               and(
                 eq(sourceQueryRevisions.projectId, projectId),
                 eq(sourceQueryRevisions.adapter, source.query.adapter),
+                eq(sourceQueryRevisions.queryIdentity, source.query.queryIdentity),
+                eq(sourceQueryRevisions.acquisitionBasisHash, nextBasisHash),
               ),
-            );
+            )
+            .limit(1)
+            .for("update");
           const payload = {
             version: 1,
             adapter: source.query.adapter,
             query: source.query.normalizedQuery,
             acquisition_basis_hash: nextBasisHash,
           };
-          const bytes = canonicalJsonBytes(payload);
-          const [replacement] = await this.db
-            .insert(sourceQueryRevisions)
-            .values({
-              id: randomUUID(),
-              projectId,
-              adapter: source.query.adapter,
-              revision: Number(latest?.revision ?? 0) + 1,
-              normalizedQuery: source.query.normalizedQuery,
-              queryIdentity: source.query.queryIdentity,
-              acquisitionBasisHash: nextBasisHash,
-              canonicalBytes: bytes,
-              canonicalSha256: canonicalJsonSha256(payload),
-              status: "needs_review",
-            })
-            .returning();
+          const canonicalSha256 = canonicalJsonSha256(payload);
+          if (existing && existing.canonicalSha256 !== canonicalSha256) {
+            throw new HomingError(
+              "conflict",
+              "The matching source query revision has different canonical bytes.",
+              409,
+            );
+          }
+          let replacement = existing;
+          if (!replacement) {
+            const [latest] = await this.db
+              .select({
+                revision: sql<number>`coalesce(max(${sourceQueryRevisions.revision}), 0)`,
+              })
+              .from(sourceQueryRevisions)
+              .where(
+                and(
+                  eq(sourceQueryRevisions.projectId, projectId),
+                  eq(sourceQueryRevisions.adapter, source.query.adapter),
+                ),
+              );
+            const bytes = canonicalJsonBytes(payload);
+            const [created] = await this.db
+              .insert(sourceQueryRevisions)
+              .values({
+                id: randomUUID(),
+                projectId,
+                adapter: source.query.adapter,
+                revision: Number(latest?.revision ?? 0) + 1,
+                normalizedQuery: source.query.normalizedQuery,
+                queryIdentity: source.query.queryIdentity,
+                acquisitionBasisHash: nextBasisHash,
+                canonicalBytes: bytes,
+                canonicalSha256,
+                status: "needs_review",
+              })
+              .returning({
+                id: sourceQueryRevisions.id,
+                revision: sourceQueryRevisions.revision,
+                canonicalSha256: sourceQueryRevisions.canonicalSha256,
+                status: sourceQueryRevisions.status,
+              });
+            replacement = created;
+          }
           if (!replacement) throw new Error("source query replacement returned no row");
           queryRefs.push({
             id: replacement.id,
