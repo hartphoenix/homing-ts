@@ -227,10 +227,10 @@ export type AgentSourceQuery = {
 };
 
 export type AgentAcquisitionBasis = {
-  locations?: string[];
-  min_price_minor?: number | null;
-  max_price_minor?: number | null;
-  housing_types?: Array<"entire" | "shared">;
+  locations: string[];
+  min_price_minor: number | null;
+  max_price_minor: number | null;
+  housing_types: Array<"entire" | "shared">;
 };
 
 export type AgentProject = {

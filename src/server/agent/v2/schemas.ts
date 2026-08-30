@@ -7,6 +7,49 @@ export const requiredEvidenceKeySchema = z.enum(requiredEvidenceKeys);
 
 const objectSchema = z.record(z.string(), z.unknown());
 
+export const acquisitionBasisSchema = z
+  .object({
+    locations: z
+      .array(
+        z
+          .string()
+          .min(1)
+          .refine((value) => value.trim().length > 0),
+      )
+      .min(1)
+      .refine((values) => new Set(values).size === values.length),
+    min_price_minor: z.number().int().nonnegative().nullable(),
+    max_price_minor: z.number().int().nonnegative().nullable(),
+    housing_types: z
+      .array(z.enum(["entire", "shared"]))
+      .refine((values) => new Set(values).size === values.length),
+  })
+  .strict()
+  .superRefine((basis, context) => {
+    if (
+      basis.min_price_minor !== null &&
+      basis.max_price_minor !== null &&
+      basis.min_price_minor > basis.max_price_minor
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["max_price_minor"],
+        message: "max_price_minor must be at least min_price_minor",
+      });
+    }
+  });
+
+const requiredEvidenceSchema = z
+  .array(requiredEvidenceKeySchema)
+  .min(1)
+  .max(requiredEvidenceKeys.length)
+  .refine((values) => new Set(values).size === values.length, "required evidence must be unique");
+
+const unknownEvidenceSchema = z
+  .array(requiredEvidenceKeySchema)
+  .max(requiredEvidenceKeys.length)
+  .refine((values) => new Set(values).size === values.length, "unknowns must be unique");
+
 export const evidenceStateSchema = z.discriminatedUnion("state", [
   z.object({ state: z.literal("present"), value: z.unknown() }).strict(),
   z.object({ state: z.literal("absent") }).strict(),
@@ -48,8 +91,8 @@ export const configRevisionPayloadSchema = z
     version: z.literal(1),
     prompt: z.string(),
     criteria: objectSchema,
-    required_evidence: z.array(requiredEvidenceKeySchema).max(requiredEvidenceKeys.length),
-    acquisition_basis: objectSchema,
+    required_evidence: requiredEvidenceSchema,
+    acquisition_basis: acquisitionBasisSchema,
     source_queries: z.array(sourceQueryReferenceSchema).max(8),
   })
   .strict();
@@ -167,12 +210,6 @@ export const v2SourceQueryInputSchema = z
     }
   });
 
-const requiredEvidenceSchema = z
-  .array(requiredEvidenceKeySchema)
-  .min(1)
-  .max(requiredEvidenceKeys.length)
-  .refine((values) => new Set(values).size === values.length, "required evidence must be unique");
-
 const sourceQueriesSchema = z
   .array(v2SourceQueryInputSchema)
   .min(1)
@@ -208,7 +245,7 @@ export const v2ConfigCreateSchema = z
     prompt: z.string().max(100_000),
     criteria: objectSchema,
     required_evidence: requiredEvidenceSchema,
-    acquisition_basis: objectSchema,
+    acquisition_basis: acquisitionBasisSchema,
     source_queries: sourceQueriesSchema,
   })
   .strict();
@@ -269,7 +306,7 @@ export const v2DeliverySchema = z
     facts_hash: z.string().regex(/^[0-9a-f]{64}$/),
     disposition: z.literal("kept"),
     reason: z.string().max(500),
-    unknowns: z.array(z.string().max(120)).max(requiredEvidenceKeys.length),
+    unknowns: unknownEvidenceSchema,
     lead: v2DeliveryLeadSchema,
   })
   .strict();
@@ -289,7 +326,7 @@ export const v2ClientConfigCreateSchema = z
   .object({
     expected_revision: z.number().int().nonnegative().nullable().optional(),
     required_evidence: requiredEvidenceSchema,
-    acquisition_basis: objectSchema,
+    acquisition_basis: acquisitionBasisSchema,
     source_queries: sourceQueriesSchema,
   })
   .strict();

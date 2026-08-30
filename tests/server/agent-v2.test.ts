@@ -217,7 +217,12 @@ describe("v2 server contract", () => {
         prompt: "Find a home",
         criteria: { max_price: 2500 },
         required_evidence: ["location", "price", "availability", "housing_type"],
-        acquisition_basis: { location: "Brooklyn" },
+        acquisition_basis: {
+          locations: ["Brooklyn"],
+          min_price_minor: null,
+          max_price_minor: 250000,
+          housing_types: ["entire"],
+        },
         source_queries: [
           { adapter: "zumper-com", query: { url: "https://www.zumper.com/homes/brooklyn" } },
         ],
@@ -237,7 +242,12 @@ describe("v2 server contract", () => {
       body: JSON.stringify({
         expected_revision: 1,
         required_evidence: ["location", "price", "availability", "housing_type"],
-        acquisition_basis: { location: "Brooklyn" },
+        acquisition_basis: {
+          locations: ["Brooklyn"],
+          min_price_minor: null,
+          max_price_minor: 250000,
+          housing_types: ["entire"],
+        },
         source_queries: [
           { adapter: "zumper-com", query: { url: "https://www.zumper.com/homes/brooklyn" } },
         ],
@@ -281,9 +291,62 @@ describe("v2 server contract", () => {
       headers: { ...authHeader, "Content-Type": "application/json" },
       body: JSON.stringify({
         required_evidence: ["location", "price", "availability", "housing_type"],
-        acquisition_basis: { locations: ["Brooklyn"] },
+        acquisition_basis: {
+          locations: ["Brooklyn"],
+          min_price_minor: null,
+          max_price_minor: null,
+          housing_types: [],
+        },
         source_queries: [{ adapter: "zumper-com", query: { url: "https://zumper.com/for-rent" } }],
         ...overrides,
+      }),
+    });
+    expect(response.status).toBe(422);
+  });
+
+  test.each([
+    ["missing field", { locations: ["Brooklyn"], min_price_minor: null, max_price_minor: 250000 }],
+    [
+      "unknown field",
+      {
+        locations: ["Brooklyn"],
+        min_price_minor: null,
+        max_price_minor: 250000,
+        housing_types: [],
+        neighborhood: "Brooklyn",
+      },
+    ],
+    [
+      "empty locations",
+      { locations: [], min_price_minor: null, max_price_minor: 250000, housing_types: [] },
+    ],
+    [
+      "inverted price range",
+      {
+        locations: ["Brooklyn"],
+        min_price_minor: 300000,
+        max_price_minor: 250000,
+        housing_types: [],
+      },
+    ],
+    [
+      "duplicate housing type",
+      {
+        locations: ["Brooklyn"],
+        min_price_minor: null,
+        max_price_minor: null,
+        housing_types: ["entire", "entire"],
+      },
+    ],
+  ])("rejects invalid acquisition basis: %s", async (_name, acquisition_basis) => {
+    const { router } = build();
+    const response = await router.request(`/projects/${projectId}/config-revisions`, {
+      method: "POST",
+      headers: { ...authHeader, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        required_evidence: ["location", "price", "availability", "housing_type"],
+        acquisition_basis,
+        source_queries: [{ adapter: "zumper-com", query: { url: "https://zumper.com/for-rent" } }],
       }),
     });
     expect(response.status).toBe(422);
@@ -393,6 +456,44 @@ describe("v2 server contract", () => {
     expect(delivery.status).toBe(201);
     expect(calls.delivery).toBeDefined();
   });
+
+  test.each([
+    ["unsupported key", ["not-an-evidence-key"]],
+    ["duplicate key", ["location", "location"]],
+  ])("rejects invalid delivery unknowns: %s", async (_name, unknowns) => {
+    const { router } = build();
+    const response = await router.request(
+      `/projects/${projectId}/leads/create-or-return-existing`,
+      {
+        method: "POST",
+        headers: { ...authHeader, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt_revision_id: 12,
+          facts_hash: hash,
+          disposition: "kept",
+          reason: "fits",
+          unknowns,
+          lead: {
+            source: "zumper-com",
+            source_listing_id: "invalid-unknowns",
+            canonical_url: "https://example.test/invalid-unknowns",
+            title: "Home",
+            summary: "",
+            location: "Brooklyn",
+            price_display: "$2,500",
+            price_amount: "2500.00",
+            price_currency: "USD",
+            availability: "now",
+            housing_type: "entire",
+            listed_at: null,
+            attributes: {},
+            verification_notes: "",
+          },
+        }),
+      },
+    );
+    expect(response.status).toBe(422);
+  });
 });
 
 describe("reviewed Python client wire contract", () => {
@@ -448,7 +549,7 @@ projects = client.projects()
 assert len(projects) == 1
 project = projects[0]
 project_id = project["project_id"]
-created_config = client.create_config(project_id, {"expected_revision": project["current_config_revision"], "required_evidence": ["location", "price", "availability", "housing_type"], "acquisition_basis": {"locations": ["Brooklyn"]}, "source_queries": [{"adapter": "zumper-com", "query": {"url": "https://www.zumper.com/homes/brooklyn"}}]})
+created_config = client.create_config(project_id, {"expected_revision": project["current_config_revision"], "required_evidence": ["location", "price", "availability", "housing_type"], "acquisition_basis": {"locations": ["Brooklyn"], "min_price_minor": None, "max_price_minor": None, "housing_types": []}, "source_queries": [{"adapter": "zumper-com", "query": {"url": "https://www.zumper.com/homes/brooklyn"}}]})
 assert created_config["config_status"] in {"complete", "needs_review"}
 config = client.config_revision(project_id, str(project["current_config_revision"]), project["config_sha256"])
 query = project["source_queries"][0]
