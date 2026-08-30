@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, or, sql } from "drizzle-orm";
 import { AGENT_SCOPE_SET, type AgentScope, V2_AGENT_SCOPE_SET } from "../../auth/scopes";
 import type { AgentTokenRecord } from "../../auth/types";
 import { getDatabase } from "../../db/client";
@@ -337,6 +337,7 @@ export class PostgresV2Repository implements V2Repository {
               .where(
                 and(
                   eq(promptRevisionSourceQueries.promptRevisionId, row.configRevisionId),
+                  eq(promptRevisionSourceQueries.projectId, row.id),
                   eq(sourceQueryRevisions.projectId, row.id),
                 ),
               )
@@ -421,6 +422,7 @@ export class PostgresV2Repository implements V2Repository {
       .where(
         and(
           eq(promptRevisionSourceQueries.promptRevisionId, row.id),
+          eq(promptRevisionSourceQueries.projectId, row.projectId),
           eq(sourceQueryRevisions.projectId, row.projectId),
         ),
       )
@@ -523,23 +525,24 @@ export class PostgresV2Repository implements V2Repository {
         ensureHash(query.queryIdentity);
         ensureHash(query.acquisitionBasisHash);
         ensureHash(query.canonicalSha256);
-        const existingRows = await transaction
-          .select()
-          .from(sourceQueryRevisions)
-          .where(
-            and(
-              eq(sourceQueryRevisions.projectId, input.projectId),
-              eq(sourceQueryRevisions.adapter, query.adapter),
-              eq(sourceQueryRevisions.queryIdentity, query.queryIdentity),
-            ),
-          )
-          .limit(1)
-          .for("update");
-        let existing = existingRows[0];
-        if (existing && !queryInputEqual(existing as Row, query)) {
-          conflict("The source query identity already has different canonical bytes.");
-        }
-        if (!existing) {
+        let existing: typeof sourceQueryRevisions.$inferSelect | undefined;
+        for (let attempt = 0; attempt < 3 && !existing; attempt += 1) {
+          const existingRows = await transaction
+            .select()
+            .from(sourceQueryRevisions)
+            .where(
+              and(
+                eq(sourceQueryRevisions.projectId, input.projectId),
+                eq(sourceQueryRevisions.adapter, query.adapter),
+                eq(sourceQueryRevisions.queryIdentity, query.queryIdentity),
+                eq(sourceQueryRevisions.acquisitionBasisHash, query.acquisitionBasisHash),
+              ),
+            )
+            .limit(1)
+            .for("update");
+          existing = existingRows[0];
+          if (existing) break;
+
           const [latest] = await transaction
             .select({ revision: sql<number>`coalesce(max(${sourceQueryRevisions.revision}), 0)` })
             .from(sourceQueryRevisions)
@@ -562,10 +565,15 @@ export class PostgresV2Repository implements V2Repository {
               canonicalSha256: query.canonicalSha256,
               status: "ready",
             })
+            .onConflictDoNothing()
             .returning();
-          if (!created) throw new Error("source query insert returned no row");
           existing = created;
-        } else if (existing.status === "needs_review") {
+        }
+        if (!existing) conflict("Could not allocate the source query revision; retry the request.");
+        if (existing && !queryInputEqual(existing as Row, query)) {
+          conflict("The source query identity already has different canonical bytes.");
+        }
+        if (existing.status === "needs_review") {
           const [ready] = await transaction
             .update(sourceQueryRevisions)
             .set({ status: "ready" })
@@ -609,6 +617,7 @@ export class PostgresV2Repository implements V2Repository {
       if (!created) throw new Error("configuration revision insert returned no row");
       await transaction.insert(promptRevisionSourceQueries).values(
         queryRefs.map((query) => ({
+          projectId: input.projectId,
           promptRevisionId: created.id,
           sourceQueryRevisionId: query.id,
           position: query.position,
@@ -753,6 +762,7 @@ export class PostgresV2Repository implements V2Repository {
           .where(
             and(
               eq(promptRevisionSourceQueries.promptRevisionId, config.id),
+              eq(promptRevisionSourceQueries.projectId, project.projectId),
               eq(sourceQueryRevisions.projectId, project.projectId),
             ),
           );
@@ -926,14 +936,23 @@ export class PostgresV2Repository implements V2Repository {
         notFound();
       }
       ensureHash(input.factsHash);
+      const identityHash = canonicalJsonSha256({
+        source: input.lead.source,
+        source_listing_id: input.lead.sourceListingId,
+      });
       const existingLeadRows = await transaction
         .select({ id: leads.id })
         .from(leads)
         .where(
           and(
             eq(leads.projectId, input.projectId),
-            eq(leads.source, input.lead.source),
-            eq(leads.sourceListingId, input.lead.sourceListingId),
+            or(
+              and(
+                eq(leads.source, input.lead.source),
+                eq(leads.sourceListingId, input.lead.sourceListingId),
+              ),
+              eq(leads.identityHash, identityHash),
+            ),
           ),
         )
         .limit(1)
@@ -948,10 +967,7 @@ export class PostgresV2Repository implements V2Repository {
             source: input.lead.source,
             sourceListingId: input.lead.sourceListingId,
             canonicalUrl: input.lead.canonicalUrl,
-            identityHash: canonicalJsonSha256({
-              source: input.lead.source,
-              source_listing_id: input.lead.sourceListingId,
-            }),
+            identityHash,
             sourceUrl: input.lead.canonicalUrl,
             title: input.lead.title,
             summary: input.lead.summary,
@@ -966,9 +982,31 @@ export class PostgresV2Repository implements V2Repository {
             verificationNotes: input.lead.verificationNotes,
             creatorId: input.userId,
           })
+          .onConflictDoNothing()
           .returning({ id: leads.id });
-        if (!created) throw new Error("lead insert returned no row");
-        leadId = created.id;
+        if (created) {
+          leadId = created.id;
+        } else {
+          const [racedLead] = await transaction
+            .select({ id: leads.id })
+            .from(leads)
+            .where(
+              and(
+                eq(leads.projectId, input.projectId),
+                or(
+                  and(
+                    eq(leads.source, input.lead.source),
+                    eq(leads.sourceListingId, input.lead.sourceListingId),
+                  ),
+                  eq(leads.identityHash, identityHash),
+                ),
+              ),
+            )
+            .limit(1)
+            .for("update");
+          if (!racedLead) throw new Error("lead insert disappeared during delivery");
+          leadId = racedLead.id;
+        }
       }
       const observations = await transaction
         .insert(matchObservations)

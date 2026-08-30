@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "source_query_revisions_project_adapter_identity_basis_uniq" ON "source_query_revisions" USING btree ("project_id","adapter","query_identity","acquisition_basis_hash");

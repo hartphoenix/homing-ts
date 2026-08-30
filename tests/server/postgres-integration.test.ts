@@ -255,6 +255,134 @@ describePostgres("PostgreSQL concurrency invariants", () => {
     expect(results.filter((result) => result.replayed)).toHaveLength(7);
   });
 
+  it("resolves concurrent source-query creation without a unique-race error", async () => {
+    const acquisitionBasis = { locations: ["Brooklyn"] };
+    const sourceQuery = { url: "https://www.zumper.com/homes/brooklyn" };
+    const attempts = await Promise.allSettled(
+      Array.from({ length: 8 }, () =>
+        v2.createConfigRevision({
+          userId: 1,
+          projectId,
+          expectedRevision: 1,
+          requiredEvidence: ["location", "price", "availability", "housing_type"],
+          acquisitionBasis,
+          sourceQueries: [
+            {
+              adapter: "zumper-com",
+              normalizedQuery: sourceQuery,
+              queryIdentity: sourceQueryIdentity(projectId, "zumper-com", sourceQuery),
+              acquisitionBasisHash: canonicalJsonSha256(acquisitionBasis),
+              canonicalBytes: canonicalJsonBytes({
+                version: 1,
+                adapter: "zumper-com",
+                query: sourceQuery,
+                acquisition_basis_hash: canonicalJsonSha256(acquisitionBasis),
+              }),
+              canonicalSha256: canonicalJsonSha256({
+                version: 1,
+                adapter: "zumper-com",
+                query: sourceQuery,
+                acquisition_basis_hash: canonicalJsonSha256(acquisitionBasis),
+              }),
+            },
+          ],
+        }),
+      ),
+    );
+    expect(attempts.filter((attempt) => attempt.status === "fulfilled")).toHaveLength(1);
+    const rejected = attempts.filter((attempt) => attempt.status === "rejected");
+    expect(rejected).toHaveLength(7);
+    expect(
+      rejected.every(
+        (attempt) =>
+          (attempt.reason as { code?: unknown }).code === "conflict" &&
+          (attempt.reason as { status?: unknown }).status === 409,
+      ),
+    ).toBe(true);
+    const [sourceCount] = await sqlClient`
+      select count(*)::text as count
+        from source_query_revisions
+       where project_id = ${projectId}
+    `;
+    expect(sourceCount?.count).toBe("1");
+  });
+
+  it("resolves concurrent absent-lead deliveries to one lead and one observation", async () => {
+    const snapshot = await createV2Snapshot();
+    const input = {
+      userId: 1,
+      tokenId: tokenOne,
+      projectId,
+      promptRevisionId: snapshot.promptRevisionId,
+      promptRevision: snapshot.promptRevision,
+      factsHash: "e".repeat(64),
+      disposition: "kept" as const,
+      reason: "meets requirements",
+      unknowns: [],
+      lead: {
+        source: "zumper-com" as const,
+        sourceListingId: "concurrent-delivery-1",
+        canonicalUrl: "https://example.test/concurrent-delivery-1",
+        title: "Concurrent delivery",
+        summary: "",
+        location: "Brooklyn",
+        priceDisplay: "$2,500",
+        priceAmount: "2500.00",
+        priceCurrency: "USD",
+        availability: "now",
+        housingType: "entire" as const,
+        listedAt: null,
+        attributes: {},
+        verificationNotes: "",
+      },
+    };
+    const results = await Promise.all(Array.from({ length: 8 }, () => v2.deliver(input)));
+    expect(new Set(results.map((result) => result.leadId)).size).toBe(1);
+    expect(new Set(results.map((result) => result.observationId)).size).toBe(1);
+    expect(results.filter((result) => result.status === "created")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "existing")).toHaveLength(7);
+    const [counts] = await sqlClient`
+      select
+        (select count(*)::text from leads where project_id = ${projectId}) as leads,
+        (select count(*)::text from match_observations where project_id = ${projectId}) as observations
+    `;
+    expect(counts).toEqual({ leads: "1", observations: "1" });
+  });
+
+  it("rejects cross-project v2 references at the database boundary", async () => {
+    const otherProjectId = "88888888-8888-4888-8888-888888888888";
+    await sqlClient`
+      insert into projects
+        (id, name, slug, current_prompt, criteria, creator_id, prompt_revision, feed_epoch)
+      values
+        (${otherProjectId}, 'Other project', 'other-project', 'Other prompt', '{}'::jsonb, 1, 1, 'other')
+    `;
+    const [otherRevision] = await sqlClient`
+      insert into prompt_revisions (project_id, revision, prompt, criteria, editor_id)
+      values (${otherProjectId}, 1, 'Other prompt', '{}'::jsonb, 1)
+      returning id
+    `;
+    const snapshot = await createV2Snapshot();
+    const sourceQueryId = snapshot.queries[0]?.sourceQueryRevisionId;
+    if (!sourceQueryId || snapshot.promptRevisionId === null || !otherRevision?.id) {
+      throw new Error("incomplete v2 isolation fixture");
+    }
+    await expect(
+      sqlClient`
+        insert into prompt_revision_source_queries
+          (project_id, prompt_revision_id, source_query_revision_id, position)
+        values (${otherProjectId}, ${snapshot.promptRevisionId}, ${sourceQueryId}, 0)
+      `,
+    ).rejects.toThrow();
+    await expect(
+      sqlClient`
+        update projects
+           set current_config_revision_id = ${otherRevision.id}
+         where id = ${projectId}
+      `,
+    ).rejects.toThrow();
+  });
+
   it("returns a typed conflict when an invocation is replayed with another snapshot", async () => {
     const snapshot = await createV2Snapshot();
     const input: CreateRunInput = {
@@ -404,8 +532,8 @@ describePostgres("PostgreSQL concurrency invariants", () => {
       returning id
     `;
     await sqlClient`
-      insert into prompt_revision_source_queries (prompt_revision_id, source_query_revision_id, position)
-      values (${config?.id}, ${source?.id}, 0)
+      insert into prompt_revision_source_queries (project_id, prompt_revision_id, source_query_revision_id, position)
+      values (${projectId}, ${config?.id}, ${source?.id}, 0)
     `;
     await sqlClient`
       update projects set prompt_revision = 2, current_config_revision_id = ${config?.id}
@@ -435,7 +563,8 @@ describePostgres("PostgreSQL concurrency invariants", () => {
       select source.status
         from prompt_revision_source_queries link
         join source_query_revisions source on source.id = link.source_query_revision_id
-       where link.prompt_revision_id = (select id from prompt_revisions where project_id = ${projectId} and revision = 4)
+       where link.project_id = ${projectId}
+         and link.prompt_revision_id = (select id from prompt_revisions where project_id = ${projectId} and revision = 4)
     `;
     expect(reviewConfig?.config_status).toBe("needs_review");
     expect(reviewSources).toEqual([{ status: "needs_review" }]);

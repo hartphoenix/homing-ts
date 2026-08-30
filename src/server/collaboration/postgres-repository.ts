@@ -531,7 +531,13 @@ export class PostgresCollaborationRepository implements CollaborationRepository 
             sourceQueryRevisions,
             eq(sourceQueryRevisions.id, promptRevisionSourceQueries.sourceQueryRevisionId),
           )
-          .where(eq(promptRevisionSourceQueries.promptRevisionId, currentConfig.id))
+          .where(
+            and(
+              eq(promptRevisionSourceQueries.promptRevisionId, currentConfig.id),
+              eq(promptRevisionSourceQueries.projectId, projectId),
+              eq(sourceQueryRevisions.projectId, projectId),
+            ),
+          )
           .orderBy(asc(promptRevisionSourceQueries.position))
       : [];
 
@@ -641,6 +647,7 @@ export class PostgresCollaborationRepository implements CollaborationRepository 
     if (configStatus !== "legacy") {
       await this.db.insert(promptRevisionSourceQueries).values(
         queryRefs.map((query) => ({
+          projectId,
           promptRevisionId: revision.id,
           sourceQueryRevisionId: query.id,
           position: query.position,

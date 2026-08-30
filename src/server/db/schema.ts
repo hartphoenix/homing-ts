@@ -329,6 +329,12 @@ export const sourceQueryRevisions = pgTable(
       table.adapter,
       table.queryIdentity,
     ),
+    uniqueIndex("source_query_revisions_project_adapter_identity_basis_uniq").on(
+      table.projectId,
+      table.adapter,
+      table.queryIdentity,
+      table.acquisitionBasisHash,
+    ),
     uniqueIndex("source_query_revisions_project_adapter_revision_uniq").on(
       table.projectId,
       table.adapter,
@@ -352,16 +358,25 @@ export const sourceQueryRevisions = pgTable(
 export const promptRevisionSourceQueries = pgTable(
   "prompt_revision_source_queries",
   {
-    promptRevisionId: bigint("prompt_revision_id", { mode: "number" })
+    projectId: uuid("project_id")
       .notNull()
-      .references(() => promptRevisions.id, { onDelete: "cascade" }),
-    sourceQueryRevisionId: uuid("source_query_revision_id")
-      .notNull()
-      .references(() => sourceQueryRevisions.id, { onDelete: "restrict" }),
+      .references((): AnyPgColumn => projects.id, { onDelete: "cascade" }),
+    promptRevisionId: bigint("prompt_revision_id", { mode: "number" }).notNull(),
+    sourceQueryRevisionId: uuid("source_query_revision_id").notNull(),
     position: integer("position").notNull(),
   },
   (table) => [
     primaryKey({ columns: [table.promptRevisionId, table.sourceQueryRevisionId] }),
+    foreignKey({
+      columns: [table.promptRevisionId, table.projectId],
+      foreignColumns: [promptRevisions.id, promptRevisions.projectId],
+      name: "prompt_revision_source_queries_prompt_revision_project_fk",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.sourceQueryRevisionId, table.projectId],
+      foreignColumns: [sourceQueryRevisions.id, sourceQueryRevisions.projectId],
+      name: "prompt_revision_source_queries_source_query_revision_project_fk",
+    }).onDelete("restrict"),
     uniqueIndex("prompt_revision_source_queries_position_uniq").on(
       table.promptRevisionId,
       table.position,
