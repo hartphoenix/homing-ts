@@ -1,6 +1,6 @@
 # Homing agent kit v2 build specification
 
-Status: v2 implementation candidate; native and database qualification pending.
+Status: v2 code ready to deploy; post-deploy native and production qualification pending.
 
 ## Contract succession
 

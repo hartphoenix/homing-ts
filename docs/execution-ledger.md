@@ -69,17 +69,23 @@ Completed local evidence:
 - Focused server, client, browser, typecheck, lint, and generated API checks passed on the port
   commits.
 
-## Final qualification record — commit `ff06377`
+## Final qualification record — commit `f05b673`
 
-- Local `bun run check` passed with 124 active tests and 20 PostgreSQL-gated skips; build,
+- Local `bun run check` passed with 131 active tests and 21 PostgreSQL-gated skips; build,
   typecheck, lint, and generated API checks passed.
-- The committed Python package suite passed 7/7 tests.
+- The committed Python package suite passed 11/11 tests.
 - `bun run test:agentation` passed 22/22 Chromium UI tests, including the v2 lifecycle-state test.
 - An isolated deployment-host rehearsal used disposable PostgreSQL 17 and the pinned production
-  Dockerfile build, applied migrations twice, and passed all 20 PostgreSQL integration tests.
-- The production database and service were untouched. Package/server adversarial blockers were
-  fixed, obsolete local rollback was removed, and initial harness runtime/container failures were
-  resolved without product-level failure claims.
+  Dockerfile build, applied migrations twice, and passed all 21 PostgreSQL integration tests.
+- The prior image
+  `sha256:a34b7cbbd526e9928c448f935df48da2c5c58bbbfb7e0430f7cd413b9727f13a` served healthy HTML
+  against the expanded schema. A streaming age-encrypted backup, isolated restore, repeated
+  migrations, and new-image health/HTML checks passed.
+- The encrypted rehearsal artifact SHA-256 was
+  `66467d1927bd53d17505b9f68d8881bbe7b4fca3a90cbb006ab9ce3c0b2e09fa` before automatic cleanup.
+  Production was untouched. Package/server adversarial blockers were fixed, obsolete local
+  rollback was removed, and initial harness runtime/container failures were resolved without
+  product-level failure claims.
 
 Qualification blockers and non-claims:
 

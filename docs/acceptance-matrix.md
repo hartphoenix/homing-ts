@@ -8,15 +8,20 @@ The former `com.homing.backup` LaunchAgent is disabled and archived. It is not a
 gate or protected schedule; backup qualification uses the documented manual command and an
 explicitly recorded artifact.
 
-Final qualification for commit `ff06377` passed the local `bun run check` with 124 active tests
-and 20 PostgreSQL-gated skips; build, typecheck, lint, and generated API checks were green. The
-committed Python package suite passed 7/7, and the agentation suite passed 22/22 Chromium UI tests,
-including the v2 lifecycle-state test. An isolated deployment-host rehearsal used disposable
-PostgreSQL 17 and the pinned production Dockerfile build, applied migrations twice, and passed all
-20 PostgreSQL integration tests. The production database and service were untouched; package and
-server adversarial blockers were fixed and the obsolete local rollback path was removed. The code
-is ready to deploy, but this record does not claim a physical native macOS install or wake test or
-a production canary; those remain post-deploy/manual gates for proving rollout.
+Final qualification for commit `f05b673` passed the local `bun run check` with 131 active tests and
+21 PostgreSQL-gated skips; build, typecheck, lint, and generated API checks were green. The
+committed Python package suite passed 11/11, and the agentation suite passed 22/22 Chromium UI
+tests, including the v2 lifecycle-state test. An isolated deployment-host rehearsal used
+disposable PostgreSQL 17 and the pinned production Dockerfile build, applied migrations twice, and
+passed all 21 PostgreSQL integration tests. The prior image
+`sha256:a34b7cbbd526e9928c448f935df48da2c5c58bbbfb7e0430f7cd413b9727f13a` served healthy HTML
+against the expanded schema; a streaming age-encrypted backup, isolated restore, repeated
+migrations, and new-image health/HTML checks passed. The encrypted rehearsal artifact had SHA-256
+`66467d1927bd53d17505b9f68d8881bbe7b4fca3a90cbb006ab9ce3c0b2e09fa` before automatic cleanup.
+Production was untouched; package/server adversarial blockers were fixed and the obsolete local
+rollback path was removed. The code is ready to deploy, but this record does not claim a physical
+native macOS install or wake test or a production canary; those remain post-deploy/manual gates
+for proving rollout.
 
 ## Contract and canonical state
 
