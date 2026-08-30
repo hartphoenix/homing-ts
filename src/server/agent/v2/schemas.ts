@@ -132,18 +132,84 @@ export const v2PairingRequestSchema = z
 export const v2SourceQueryInputSchema = z
   .object({
     adapter: sourceAdapterSchema,
-    query: objectSchema,
+    query: z.object({ url: z.string().url().max(2_000) }).strict(),
   })
-  .strict();
+  .strict()
+  .superRefine((source, context) => {
+    let url: URL;
+    try {
+      url = new URL(source.query.url);
+    } catch {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["query", "url"],
+        message: "URL is invalid",
+      });
+      return;
+    }
+    const hosts = {
+      "zumper-com": new Set(["zumper.com", "www.zumper.com"]),
+      "streeteasy-com": new Set(["streeteasy.com", "www.streeteasy.com"]),
+    }[source.adapter];
+    if (
+      url.protocol !== "https:" ||
+      !hosts.has(url.hostname.toLowerCase()) ||
+      url.username ||
+      url.password ||
+      url.hash ||
+      (url.port !== "" && url.port !== "443")
+    ) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["query", "url"],
+        message: "URL is outside the selected source adapter",
+      });
+    }
+  });
+
+const requiredEvidenceSchema = z
+  .array(requiredEvidenceKeySchema)
+  .min(1)
+  .max(requiredEvidenceKeys.length)
+  .refine((values) => new Set(values).size === values.length, "required evidence must be unique");
+
+const sourceQueriesSchema = z
+  .array(v2SourceQueryInputSchema)
+  .min(1)
+  .max(8)
+  .superRefine((queries, context) => {
+    const counts = new Map<SourceAdapter, number>();
+    const identities = new Set<string>();
+    for (const [index, source] of queries.entries()) {
+      const count = (counts.get(source.adapter) ?? 0) + 1;
+      counts.set(source.adapter, count);
+      if (count > 4) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [index, "adapter"],
+          message: "no more than four queries are allowed for one adapter",
+        });
+      }
+      const identity = `${source.adapter}:${source.query.url}`;
+      if (identities.has(identity)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [index, "query", "url"],
+          message: "source queries must be unique",
+        });
+      }
+      identities.add(identity);
+    }
+  });
 
 export const v2ConfigCreateSchema = z
   .object({
     expected_revision: z.number().int().nonnegative().nullable().optional(),
     prompt: z.string().max(100_000),
     criteria: objectSchema,
-    required_evidence: z.array(requiredEvidenceKeySchema).min(1).max(requiredEvidenceKeys.length),
+    required_evidence: requiredEvidenceSchema,
     acquisition_basis: objectSchema,
-    source_queries: z.array(v2SourceQueryInputSchema).min(1).max(8),
+    source_queries: sourceQueriesSchema,
   })
   .strict();
 
@@ -222,9 +288,9 @@ export const v2PauseSchema = z
 export const v2ClientConfigCreateSchema = z
   .object({
     expected_revision: z.number().int().nonnegative().nullable().optional(),
-    required_evidence: z.array(requiredEvidenceKeySchema).max(requiredEvidenceKeys.length),
+    required_evidence: requiredEvidenceSchema,
     acquisition_basis: objectSchema,
-    source_queries: z.array(v2SourceQueryInputSchema).min(1).max(8),
+    source_queries: sourceQueriesSchema,
   })
   .strict();
 

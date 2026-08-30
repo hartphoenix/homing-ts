@@ -219,7 +219,7 @@ describe("v2 server contract", () => {
         required_evidence: ["location", "price", "availability", "housing_type"],
         acquisition_basis: { location: "Brooklyn" },
         source_queries: [
-          { adapter: "zumper-com", query: { max_price: 2500, location: "Brooklyn" } },
+          { adapter: "zumper-com", query: { url: "https://www.zumper.com/homes/brooklyn" } },
         ],
       }),
     });
@@ -238,12 +238,55 @@ describe("v2 server contract", () => {
         expected_revision: 1,
         required_evidence: ["location", "price", "availability", "housing_type"],
         acquisition_basis: { location: "Brooklyn" },
-        source_queries: [{ adapter: "zumper-com", query: { location: "Brooklyn" } }],
+        source_queries: [
+          { adapter: "zumper-com", query: { url: "https://www.zumper.com/homes/brooklyn" } },
+        ],
       }),
     });
     expect(response.status).toBe(201);
     expect(calls.config).not.toHaveProperty("prompt");
     expect(calls.config).not.toHaveProperty("criteria");
+  });
+
+  test.each([
+    ["empty required evidence", { required_evidence: [] }],
+    ["duplicate required evidence", { required_evidence: ["location", "location"] }],
+    [
+      "wrong adapter host",
+      {
+        source_queries: [
+          { adapter: "zumper-com", query: { url: "https://streeteasy.com/for-rent" } },
+        ],
+      },
+    ],
+    [
+      "insecure source URL",
+      {
+        source_queries: [{ adapter: "zumper-com", query: { url: "http://zumper.com/for-rent" } }],
+      },
+    ],
+    [
+      "too many queries for one adapter",
+      {
+        source_queries: Array.from({ length: 5 }, (_, index) => ({
+          adapter: "zumper-com",
+          query: { url: `https://zumper.com/for-rent/${index}` },
+        })),
+      },
+    ],
+  ])("rejects invalid HTTP config: %s", async (_name, overrides) => {
+    const { router } = build();
+    const response = await router.request(`/projects/${projectId}/config-revisions`, {
+      method: "POST",
+      headers: { ...authHeader, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        required_evidence: ["location", "price", "availability", "housing_type"],
+        acquisition_basis: { locations: ["Brooklyn"] },
+        source_queries: [{ adapter: "zumper-com", query: { url: "https://zumper.com/for-rent" } }],
+        ...overrides,
+      }),
+    });
+    expect(response.status).toBe(422);
   });
 
   test("validates terminal run outcomes and records additive delivery", async () => {
@@ -272,6 +315,28 @@ describe("v2 server contract", () => {
       }),
     });
     expect(run.status).toBe(201);
+    const nonterminal = await router.request(`/agent-runs/${runId}`, {
+      method: "PATCH",
+      headers: { ...authHeader, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        status: "started",
+        phase: "snapshot",
+        queries: [{ source_query_revision_id: queryId, status: "pending" }],
+        counts: {
+          source_queries_total: 1,
+          source_queries_attempted: 0,
+          source_queries_completed: 0,
+          candidates_observed: 0,
+          candidates_evaluated: 0,
+          candidates_kept: 0,
+          candidates_insufficient: 0,
+          deliveries_acknowledged: 0,
+          deliveries_pending: 0,
+        },
+        failure: null,
+      }),
+    });
+    expect(nonterminal.status).toBe(422);
     const finalized = await router.request(`/agent-runs/${runId}`, {
       method: "PATCH",
       headers: { ...authHeader, "Content-Type": "application/json" },

@@ -20,6 +20,7 @@ import {
 } from "../../db/schema";
 import { HomingError } from "../../http";
 import { canonicalJsonBytes, canonicalJsonSha256 } from "./canonical";
+import { normalizeAgentRunReport } from "./outcomes";
 import type {
   ConfigSourceQueryInput,
   CreateConfigInput,
@@ -722,7 +723,12 @@ export class PostgresV2Repository implements V2Repository {
         };
       }
       for (const project of input.projects) {
-        await assertMembership(transaction as unknown as Database, input.userId, project.projectId);
+        await assertMembership(
+          transaction as unknown as Database,
+          input.userId,
+          project.projectId,
+          true,
+        );
         const [config] = await transaction
           .select({
             id: promptRevisions.id,
@@ -834,6 +840,10 @@ export class PostgresV2Repository implements V2Repository {
     report: AgentRunReport,
   ): Promise<{ run: V2RunRecord; replayed: boolean }> {
     return this.db.transaction(async (transaction) => {
+      if (report.status === "started") {
+        throw new HomingError("validation_error", "Final reports cannot have started status.", 422);
+      }
+      const normalizedReport = normalizeAgentRunReport(report);
       const rows = await transaction
         .select()
         .from(agentRuns)
@@ -850,7 +860,11 @@ export class PostgresV2Repository implements V2Repository {
       if (!row) notFound();
       const current = await mapRun(transaction as unknown as Database, row as Row);
       if (current.status !== "started") {
-        if (JSON.stringify(current.report) !== JSON.stringify(report)) {
+        if (
+          !current.report ||
+          canonicalJsonSha256(normalizeAgentRunReport(current.report)) !==
+            canonicalJsonSha256(normalizedReport)
+        ) {
           conflict("The run already has a different terminal report.");
         }
         return { run: current, replayed: true };

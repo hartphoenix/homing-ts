@@ -2,7 +2,7 @@ import type { AgentTokenRecord, Principal } from "../../auth/types";
 import { HomingError } from "../../http";
 import { canonicalJsonBytes, canonicalJsonSha256 } from "./canonical";
 import { sourceQueryIdentity } from "./identities";
-import { assertAgentRunReport } from "./outcomes";
+import { assertTerminalAgentRunReport } from "./outcomes";
 import type {
   CreateConfigInput,
   CreateRunInput,
@@ -128,9 +128,9 @@ export class V2Service {
   }
 
   async finalizeRun(userId: number, tokenId: string, runId: string, report: unknown) {
-    let value: ReturnType<typeof assertAgentRunReport>;
+    let value: ReturnType<typeof assertTerminalAgentRunReport>;
     try {
-      value = assertAgentRunReport(report);
+      value = assertTerminalAgentRunReport(report);
     } catch (error) {
       throw new HomingError("validation_error", "The run report violates v2 invariants.", 422, {
         issues: error instanceof Error ? error.message.split("; ") : [],

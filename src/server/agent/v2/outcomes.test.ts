@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { assertAgentRunReport, validateAgentRunReport } from "./outcomes";
+import {
+  assertAgentRunReport,
+  assertTerminalAgentRunReport,
+  normalizeAgentRunReport,
+  validateAgentRunReport,
+} from "./outcomes";
 
 const queryId = "11111111-1111-4111-8111-111111111111";
 const otherQueryId = "22222222-2222-4222-8222-222222222222";
@@ -122,5 +127,17 @@ describe("v2 run report invariants", () => {
       },
     });
     expect(validateAgentRunReport(value)).toMatchObject({ ok: false });
+  });
+
+  it("rejects started as a final report and normalizes replay-equivalent shape", () => {
+    expect(() => assertTerminalAgentRunReport(report({ status: "started" }))).toThrow(
+      "final reports cannot have started status",
+    );
+    const withNull = report({
+      queries: [{ source_query_revision_id: queryId, status: "completed", error_class: null }],
+    });
+    expect(normalizeAgentRunReport(assertAgentRunReport(withNull))).toEqual(
+      normalizeAgentRunReport(assertAgentRunReport(report())),
+    );
   });
 });

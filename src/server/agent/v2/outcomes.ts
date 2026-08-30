@@ -113,5 +113,43 @@ export function assertAgentRunReport(input: unknown): AgentRunReport {
   return result.value;
 }
 
+/** Finalization accepts only terminal statuses; `started` is the stored in-progress state. */
+export function assertTerminalAgentRunReport(input: unknown): AgentRunReport {
+  const report = assertAgentRunReport(input);
+  if (report.status === "started") {
+    throw new AgentRunInvariantError(["final reports cannot have started status"]);
+  }
+  return report;
+}
+
+/** Removes transport-only nulls and gives replay comparison a stable query order. */
+export function normalizeAgentRunReport(report: AgentRunReport): AgentRunReport {
+  return {
+    status: report.status,
+    phase: report.phase,
+    queries: [...report.queries]
+      .sort((left, right) =>
+        left.source_query_revision_id.localeCompare(right.source_query_revision_id),
+      )
+      .map((query) => ({
+        source_query_revision_id: query.source_query_revision_id,
+        status: query.status,
+        ...(query.error_class == null ? {} : { error_class: query.error_class }),
+      })),
+    counts: {
+      source_queries_total: report.counts.source_queries_total,
+      source_queries_attempted: report.counts.source_queries_attempted,
+      source_queries_completed: report.counts.source_queries_completed,
+      candidates_observed: report.counts.candidates_observed,
+      candidates_evaluated: report.counts.candidates_evaluated,
+      candidates_kept: report.counts.candidates_kept,
+      candidates_insufficient: report.counts.candidates_insufficient,
+      deliveries_acknowledged: report.counts.deliveries_acknowledged,
+      deliveries_pending: report.counts.deliveries_pending,
+    },
+    failure: report.failure ? { phase: report.failure.phase, code: report.failure.code } : null,
+  };
+}
+
 export const validateRunOutcome = validateAgentRunReport;
 export const assertRunOutcome = assertAgentRunReport;
