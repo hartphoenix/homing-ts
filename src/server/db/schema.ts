@@ -8,6 +8,7 @@ import {
   customType,
   date,
   decimal,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -288,6 +289,7 @@ export const promptRevisions = pgTable(
   },
   (table) => [
     uniqueIndex("prompt_revisions_project_revision_uniq").on(table.projectId, table.revision),
+    uniqueIndex("prompt_revisions_id_project_uniq").on(table.id, table.projectId),
     check(
       "prompt_revisions_v2_payload_complete",
       sql`(${table.configStatus} = 'legacy') or
@@ -312,14 +314,17 @@ export const sourceQueryRevisions = pgTable(
     canonicalBytes: bytea("canonical_bytes").notNull(),
     canonicalSha256: varchar("canonical_sha256", { length: 64 }).notNull(),
     status: sourceQueryStatus("status").notNull().default("needs_review"),
-    creationPromptRevisionId: bigint("creation_prompt_revision_id", { mode: "number" }).references(
-      () => promptRevisions.id,
-      { onDelete: "set null" },
-    ),
+    creationPromptRevisionId: bigint("creation_prompt_revision_id", { mode: "number" }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
-    uniqueIndex("source_query_revisions_project_adapter_identity_uniq").on(
+    uniqueIndex("source_query_revisions_id_project_uniq").on(table.id, table.projectId),
+    foreignKey({
+      columns: [table.creationPromptRevisionId, table.projectId],
+      foreignColumns: [promptRevisions.id, promptRevisions.projectId],
+      name: "source_query_revisions_creation_prompt_revision_project_fk",
+    }).onDelete("set null"),
+    index("source_query_revisions_project_adapter_identity_idx").on(
       table.projectId,
       table.adapter,
       table.queryIdentity,
@@ -470,14 +475,17 @@ export const agentRunProjects = pgTable(
     projectId: uuid("project_id")
       .notNull()
       .references(() => projects.id, { onDelete: "cascade" }),
-    promptRevisionId: bigint("prompt_revision_id", { mode: "number" })
-      .notNull()
-      .references(() => promptRevisions.id, { onDelete: "restrict" }),
+    promptRevisionId: bigint("prompt_revision_id", { mode: "number" }).notNull(),
     promptRevision: integer("prompt_revision").notNull(),
     canonicalSha256: varchar("canonical_sha256", { length: 64 }).notNull(),
   },
   (table) => [
     primaryKey({ columns: [table.runId, table.projectId] }),
+    foreignKey({
+      columns: [table.promptRevisionId, table.projectId],
+      foreignColumns: [promptRevisions.id, promptRevisions.projectId],
+      name: "agent_run_projects_prompt_revision_project_fk",
+    }).onDelete("restrict"),
     check(
       "agent_run_projects_canonical_hash_hex",
       sql`${table.canonicalSha256} ~ '^[0-9a-f]{64}$'`,
@@ -494,9 +502,7 @@ export const agentRunQueries = pgTable(
     projectId: uuid("project_id")
       .notNull()
       .references(() => projects.id, { onDelete: "cascade" }),
-    sourceQueryRevisionId: uuid("source_query_revision_id")
-      .notNull()
-      .references(() => sourceQueryRevisions.id, { onDelete: "restrict" }),
+    sourceQueryRevisionId: uuid("source_query_revision_id").notNull(),
     sourceQueryRevision: integer("source_query_revision").notNull(),
     canonicalSha256: varchar("canonical_sha256", { length: 64 }).notNull(),
     status: agentRunQueryStatus("status").notNull().default("pending"),
@@ -506,6 +512,16 @@ export const agentRunQueries = pgTable(
   },
   (table) => [
     primaryKey({ columns: [table.runId, table.sourceQueryRevisionId] }),
+    foreignKey({
+      columns: [table.runId, table.projectId],
+      foreignColumns: [agentRunProjects.runId, agentRunProjects.projectId],
+      name: "agent_run_queries_run_project_fk",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.sourceQueryRevisionId, table.projectId],
+      foreignColumns: [sourceQueryRevisions.id, sourceQueryRevisions.projectId],
+      name: "agent_run_queries_source_query_revision_project_fk",
+    }).onDelete("restrict"),
     check("agent_run_queries_canonical_hash_hex", sql`${table.canonicalSha256} ~ '^[0-9a-f]{64}$'`),
   ],
 );
@@ -547,6 +563,7 @@ export const leads = pgTable(
     ...timestamps,
   },
   (table) => [
+    uniqueIndex("leads_id_project_uniq").on(table.id, table.projectId),
     uniqueIndex("leads_source_identity_uniq")
       .on(table.projectId, table.source, table.sourceListingId)
       .where(sql`${table.sourceListingId} <> ''`),
@@ -578,6 +595,16 @@ export const matchObservations = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
+    foreignKey({
+      columns: [table.leadId, table.projectId],
+      foreignColumns: [leads.id, leads.projectId],
+      name: "match_observations_lead_project_fk",
+    }).onDelete("cascade"),
+    foreignKey({
+      columns: [table.promptRevisionId, table.projectId],
+      foreignColumns: [promptRevisions.id, promptRevisions.projectId],
+      name: "match_observations_prompt_revision_project_fk",
+    }).onDelete("restrict"),
     uniqueIndex("match_observations_identity_uniq").on(
       table.projectId,
       table.leadId,

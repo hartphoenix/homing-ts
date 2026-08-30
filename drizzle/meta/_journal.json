@@ -57,6 +57,20 @@
       "when": 1788049120693,
       "tag": "0007_foamy_magma",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1788053695955,
+      "tag": "0008_allow_source_query_revisions",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1788054165606,
+      "tag": "0009_enforce_v2_project_integrity",
+      "breakpoints": true
     }
   ]
 }
