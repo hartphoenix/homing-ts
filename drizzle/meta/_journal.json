@@ -50,6 +50,13 @@
       "when": 1787715158485,
       "tag": "0006_nebulous_amphibian",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1788049120693,
+      "tag": "0007_foamy_magma",
+      "breakpoints": true
     }
   ]
 }
