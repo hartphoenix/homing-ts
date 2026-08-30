@@ -1,97 +1,94 @@
-# Homing replacement build specification
+# Homing agent kit v2 build specification
 
-Status: release candidate; production migration rehearsal and cutover pending.
+Status: v2 port baseline; implementation and production qualification pending.
 
-## Outcome
+## Contract succession
 
-The replacement preserves the agent-facing API, authorization model, collaborative project
-semantics, and unchanged public agent-kit while replacing Django templates and server code with a
-Bun/Hono/React application.
+This specification governs the v2 agent kit and its TypeScript server slice. Its normative order
+is:
 
-## Initial browser product
+1. the revised v2 agent-kit and search contract;
+2. this specification and [the acceptance matrix](acceptance-matrix.md);
+3. existing Homing behavior outside the agent-kit contract;
+4. the Django v2 implementation as behavioral evidence;
+5. v1 behavior as rollback evidence only.
 
-Included: sessions, invitation-bound registration, projects, prompt/criteria, leads, interest,
-comments, trash/restore, memberships, profile, agent setup/link approval, manual tokens, and
-source-plan repair guidance.
+The current TypeScript product is the canonical server, package publisher, lifecycle UI, and
+production deployment target. The v2 port does not transplant Django, restore a Django deployment,
+or depend on v1 execution abstractions. The API route inventory and OpenAPI document are derived
+contract artifacts and must remain synchronized with this specification as implementation proceeds.
 
-Deferred: saved prompts UI, general password-reset UI, public registration, and admin UI.
+## Product boundary
 
-Account recovery is deliberately CLI-only in the initial release. `bun run db:reset-password --
---email <address>` requires an interactive TTY, reads the new password without echo or argv/env
-exposure, and writes a pinned Argon2id hash. It is the repair path for unsupported imported hashes.
+Keep one Hono application and one PostgreSQL database. Add one isolated v2 agent
+router/service/repository slice at the existing composition seam. PostgreSQL is product truth for
+canonical prompt and source-query revisions, connection authority, run reports, stable leads,
+observations, audit, and idempotency. The runner's private SQLite file is only a recoverable work
+queue and delivery ledger; it contains no prompt text or source configuration.
 
-## Migration boundary
+Reuse existing sessions, CSRF, bearer isolation, project membership, audit/change transactions,
+lead identity, package serving, React, PostgreSQL/Drizzle, Caddy, image, backup, restore, health,
+and deployment-lock primitives. Do not add a second credential system, product database, or local
+configuration replica.
 
-Migrate every user and profile, password hash, active/disabled state, last login, nonauthorizing
-legacy staff metadata, saved prompt, project and membership, invitation record, prompt revision,
-search-run history, lead (including trash state), interest, comment, source-plan review, and audit
-event. Preserve numeric IDs, UUIDs, roles, timestamps, and authored content.
+## v2 schema and canonical configuration
 
-Do not carry live authority or replay state across the trust boundary. Browser sessions, auth
-throttles, agent tokens, device links, idempotency rows, and the legacy change feed are rotated.
-Every project starts a fresh feed epoch at sequence zero. Every run drops token references, claims,
-leases, and idempotency keys; active run statuses additionally become cancelled historical rows.
-Token references in reviews and audits are cleared. Existing invitation rows remain as history,
-but unused invitation digests are tombstoned and pending invitations are revoked for explicit
-reissue after cutover.
+Use an expand-only Drizzle migration. Add protocol versioning, the user-wide `agent_paused_until`,
+temporary source-write expiry, a current project configuration pointer, complete prompt revisions,
+immutable source-query revisions and references, a distinct v2 run table, and immutable match
+observations. Existing prompt revisions remain immutable `legacy`; existing project projections
+remain unchanged and current v2 pointers start null. Do not infer v2 requirements or queries from
+legacy prose.
 
-The importer reads Django in a repeatable-read, read-only transaction and accepts only a completely
-empty target. It validates referential closure, active ownership, prompt history, comment trees,
-target bounds, and URL-identity collisions before writing. Before commit it rereads the target and
-requires an exact canonical checksum match; the separate validator independently rereads both
-databases and checks counts, checksums, migration records, fresh sessions, and feed epochs.
-Cutover is blocked if any active user has a password hash the replacement cannot verify.
+Generate canonical UTF-8 JSON once, store its exact bytes and SHA-256, and return those bytes
+directly with the digest as ETag. Prompt/configuration edits and compatibility projections commit
+with the existing audit/change event. Text-only edits carry forward confirmed requirements and
+query references; acquisition-field edits create replacement queries marked `needs_review` and
+stop unattended acquisition until attended refresh confirms them. The runner stores revision IDs
+and hashes, not configuration payloads.
 
-## Release priority
+## Authority and operations
 
-Functional correctness, security, compact compatibility tests, backup/restore, and rollback are
-Tier 1. Performance profiling begins only after the functional release candidate is complete.
+Pairing declares protocol v2 before browser approval. The initial credential has exactly
+`agent-config:read`, temporary `source-config:write`, `agent-runs:write`,
+`agent-deliveries:write`, and `connection:self`. The initial source-write grant expires after 30
+minutes; setup finalization consumes it. A browser may regrant the same connection for 15 minutes.
+Pause is user-wide and reversible for 14 days. Disconnect revokes only the calling connection and
+does not claim to remove local files.
 
-## Contract decisions
+The closed v2 route contract is the route inventory's source of implementation detail: pairing,
+introspection, self-disconnect, setup finalization, project/configuration reads and writes,
+run-create/finalize, create-or-return-existing delivery, browser pause, and browser source refresh.
+Every route enforces project isolation, scope and CSRF boundaries, typed authentication,
+authorization, validation, conflict, throttling, and availability errors.
 
-- The versioned `agentkit/package/scripts/homing.py` client is the primary wire-contract consumer.
-- Browser administration and all account/project administration are session-only.
-- Every active member role may edit project content. Owner status governs membership administration,
-  project trash, comment moderation, and the final-owner invariant.
-- Disabled password-token exchange and public registration are omitted. Invitation-bound
-  registration is retained.
-- Lead create, bulk upsert, comment create, and run completion implement durable idempotency even
-  where Django currently ignores the header.
-- `continuation.next` is accepted because the unchanged client emits it. Deprecated `next_query`
-  is accepted and dropped with a deprecation header.
-- `continuation_from_run_id` is accepted as a compatibility no-op; the installed runtime does not
-  use it.
-- Change cursors are `<feed_epoch>:<sequence>`. A legacy numeric or wrong-epoch cursor returns the
-  existing `410 cursor_expired` envelope. A fresh empty feed returns `<feed_epoch>:0`.
-- User and comment identifiers remain integer/bigint. Project, token, run, lead, and review IDs are
-  UUIDs.
-- The public kit manifest adds `first_line`, `last_line`, top-level `min_runtime_version`, and
-  `archive.url`, repairing promises already made by the unchanged bootstrap page.
+Run creation snapshots immutable revisions by invocation UUID. Finalization is idempotent and
+validates ownership, hashes, allowed transitions, bounded counts, and the rule that `completed`
+has no nonterminal query, candidate, or delivery. It does not claim to prove external exhaustion.
+Delivery never overwrites human-edited lead fields and records a match observation idempotently.
 
-## API invariants
+## Package and lifecycle
 
-- JSON bodies are limited to 2 MiB; bulk lead requests contain 1–100 items.
-- Every response includes `X-Request-ID`. Invalid bearer responses include the Homing
-  `WWW-Authenticate` resource metadata.
-- An explicit invalid Authorization header never falls back to a browser session.
-- Bearer unsafe calls bypass CSRF. Cookie-authenticated unsafe calls require exact Origin and a
-  synchronizer token.
-- Inaccessible, trashed, or token-restricted projects return 404; known accessible projects with
-  insufficient scope return 403.
-- Prompt and lead updates are optimistic and return 409 without discarding the submitted draft.
-- Project change, audit, and mutation writes commit together.
-- Production accepts browser traffic only through Caddy. Caddy overwrites `X-Forwarded-For` with
-  its observed client address before forwarding to the unexposed application container.
+The public package uses top-level `SETUP.md`, with no top-level `SKILL.md` or Agent Skill
+frontmatter. Only the optional installed `homing-check/SKILL.md` is a durable skill. Setup is
+attended, manifest-owned, reversible, and removes its verified temporary workspace after success;
+unexpected residue is reported. The scheduler invokes only the generated worker. The worker never
+changes its prompt, cadence, sources, executable code, or permissions.
 
-## Browser identity contract
+Serve v2 at `/agent/`, preserve deterministic archives, manifest fields, ETags, origin
+substitution, HEAD behavior, and exact member allowlists. Legacy setup-skill URLs may redirect to
+`SETUP.md`, but a setup `SKILL.md` is not an archive member.
 
-- `GET /api/v1/csrf` creates or refreshes the synchronizer token. Login, registration, profile
-  updates, invitation acceptance, token administration, and pairing decisions require that token
-  plus the exact configured Origin.
-- `POST /api/v1/invitations/:token/register` is the only registration path. It atomically creates
-  the invited user and profile, creates the project membership, and consumes the invitation.
-  Existing exact-email recipients instead sign in and use `POST /api/v1/invitations/:token/accept`.
-- `GET/PATCH /api/v1/me/profile` owns private search context.
-- Device pairing begins and polls without credentials. A browser session inspects and decides the
-  six-character code through `/api/v1/auth/agent-links/:code`; the paired token is disclosed once
-  and never receives `leads:destroy`.
+## Qualification and deployment
+
+Qualification must cover canonical bytes, schema constraints, PostgreSQL authorization and
+idempotency, the complete real Python v2 runner, package reproducibility, pause/disconnect/remove,
+truthful incomplete outcomes, browser lifecycle state, backup/restore, and rollback to the prior
+TypeScript image. No local v1-search rollback path exists. Do not claim Django migration, VM
+coverage, Claude Code support, or native branches not actually exercised.
+
+Production uses one immutable TypeScript image and the existing Compose topology. Run the
+expand-only migration while the prior web image remains available, force-recreate only web after
+the migration succeeds, and retain the prior image through the rollback window. Database restore
+is reserved for corruption; ordinary canary failure rolls back the prior TypeScript image and
+pauses or removes the local v2 installation.
