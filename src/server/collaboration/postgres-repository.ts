@@ -551,14 +551,19 @@ export class PostgresCollaborationRepository implements CollaborationRepository 
 
     if (currentConfig?.configStatus !== undefined && currentConfig.configStatus !== "legacy") {
       requiredEvidence = currentConfig.requiredEvidence;
-      nextAcquisitionBasis = acquisitionBasis ?? currentConfig.acquisitionBasis ?? {};
       const criteriaChanged =
         canonicalJsonSha256(criteria) !== canonicalJsonSha256(currentConfig.criteria);
+      // The current collaboration contract carries acquisition fields in criteria. When a
+      // caller does not provide the newer explicit basis field, the changed criteria is the
+      // new basis; retaining the old hash would make an immutable replacement indistinguishable
+      // from the confirmed query and violate the query identity/basis uniqueness invariant.
+      nextAcquisitionBasis =
+        acquisitionBasis ?? (criteriaChanged ? criteria : (currentConfig.acquisitionBasis ?? {}));
       const acquisitionChanged =
-        criteriaChanged ||
-        (acquisitionBasis !== undefined &&
-          canonicalJsonSha256(acquisitionBasis) !==
-            canonicalJsonSha256(currentConfig.acquisitionBasis ?? {}));
+        acquisitionBasis === undefined
+          ? criteriaChanged
+          : canonicalJsonSha256(acquisitionBasis) !==
+            canonicalJsonSha256(currentConfig.acquisitionBasis ?? {});
       configStatus =
         currentConfig.configStatus === "complete" && !acquisitionChanged
           ? "complete"
