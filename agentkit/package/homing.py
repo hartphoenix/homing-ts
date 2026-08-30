@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import socket
+from datetime import datetime, timezone
 from pathlib import Path
 import subprocess
 import sys
@@ -27,6 +28,20 @@ class HomingError(RuntimeError):
         super().__init__(message)
         self.kind = kind
         self.retryable = retryable
+
+
+def _pause_is_active(value: Any) -> bool:
+    if value is None:
+        return False
+    if not isinstance(value, str):
+        raise HomingError("malformed", "Homing returned an invalid pause timestamp")
+    try:
+        until = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise HomingError("malformed", "Homing returned an invalid pause timestamp") from exc
+    if until.tzinfo is None:
+        raise HomingError("malformed", "Homing returned an invalid pause timestamp")
+    return until > datetime.now(timezone.utc)
 
 
 @dataclass(frozen=True)
@@ -192,7 +207,7 @@ class HomingClient:
 
     def projects(self) -> list[Dict[str, Any]]:
         value = self._json(self.request("GET", "/api/v1/agent/projects"), (200,))
-        if value.get("agent_paused_until"):
+        if _pause_is_active(value.get("agent_paused_until")):
             raise HomingError("paused", "Homing housing search is paused")
         projects = value.get("items", value.get("projects", value.get("results")))
         if not isinstance(projects, list):

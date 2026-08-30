@@ -248,6 +248,7 @@ class State:
 
     def fail_query(self, query_row_id: int, error_class: str) -> None:
         allowed = {
+            "authentication",
             "blocked",
             "unavailable",
             "malformed",
@@ -255,19 +256,57 @@ class State:
             "timeout",
             "redirect",
             "configuration",
+            "invariant",
+            "model_failed",
+            "model_malformed",
+            "model_unavailable",
+            "permission",
+            "startup",
         }
         if error_class not in allowed:
             raise ValueError("unknown query error class")
         status = {
+            "authentication": "blocked",
             "timeout": "unavailable",
             "redirect": "malformed",
             "configuration": "blocked",
+            "invariant": "malformed",
+            "model_failed": "malformed",
+            "model_malformed": "malformed",
+            "model_unavailable": "unavailable",
+            "permission": "blocked",
+            "startup": "blocked",
         }.get(error_class, error_class)
         with self.transaction() as db:
             db.execute(
                 "UPDATE run_queries SET status=?,error_class=? WHERE id=? AND status='pending'",
                 (status, error_class, query_row_id),
             )
+
+    def fail_match(self, run_id: str, observation_id: int, error_class: str) -> bool:
+        """Expose a matcher obstruction on the source query that produced the observation."""
+        if error_class not in {"model_failed", "model_malformed", "model_unavailable"}:
+            raise ValueError("unknown matcher error class")
+        status = "unavailable" if error_class == "model_unavailable" else "malformed"
+        with self.transaction() as db:
+            query_ids = [
+                row[0]
+                for row in db.execute(
+                    """SELECT rq.id FROM run_queries rq
+                    JOIN query_observations qo ON qo.run_query_id=rq.id
+                    WHERE rq.run_id=? AND qo.observation_id=?""",
+                    (run_id, observation_id),
+                )
+            ]
+            if not query_ids:
+                return False
+            placeholders = ",".join("?" for _ in query_ids)
+            db.execute(
+                """UPDATE run_queries SET status=?,error_class=?
+                WHERE run_id=? AND id IN (%s) AND status='completed'""" % placeholders,
+                (status, error_class, run_id, *query_ids),
+            )
+            return True
 
     def attempt_query(self, query_row_id: int) -> None:
         with self.transaction() as db:
@@ -462,9 +501,14 @@ class State:
             )
 
     def derive(self, run_id: str) -> Dict[str, Any]:
+        run_row = self.db.execute(
+            "SELECT phase,error_class FROM runs WHERE id=?", (run_id,)
+        ).fetchone()
+        if run_row is None:
+            raise ValueError("unknown run")
         query_rows = list(
             self.db.execute(
-                "SELECT query_id,attempted,status,error_class FROM run_queries WHERE run_id=?",
+                "SELECT query_id,attempted,status,error_class FROM run_queries WHERE run_id=? ORDER BY id",
                 (run_id,),
             )
         )
@@ -491,7 +535,8 @@ class State:
             (run_id,),
         ).fetchone()[0]
         counts = {
-            "source_queries_attempted": sum(row["attempted"] for row in query_rows),
+            "source_queries_total": len(query_rows),
+            "source_queries_attempted": sum(row["status"] != "pending" for row in query_rows),
             "source_queries_completed": sum(row["status"] == "completed" for row in query_rows),
             "candidates_observed": len(candidate_rows),
             "candidates_evaluated": sum(row["status"] != "pending" for row in candidate_rows),
@@ -516,9 +561,7 @@ class State:
         )
         complete = complete and missing_deliveries == 0
         complete = complete and counts["deliveries_acknowledged"] == counts["candidates_kept"]
-        run_error = self.db.execute(
-            "SELECT error_class FROM runs WHERE id=?", (run_id,)
-        ).fetchone()[0]
+        run_error = run_row["error_class"]
         useful = bool(
             counts["source_queries_attempted"]
             or counts["candidates_observed"]
@@ -528,25 +571,45 @@ class State:
         outcome = (
             "failed"
             if terminal_error
-            or run_error in {"startup", "timeout", "authentication", "configuration", "invariant"}
+            or run_error
+            in {
+                "startup",
+                "timeout",
+                "authentication",
+                "configuration",
+                "invariant",
+                "model_failed",
+                "model_malformed",
+                "model_unavailable",
+            }
             or (run_error == "interrupted" and not useful)
             else ("completed" if complete else "incomplete")
         )
-        return {
+        report = {
             "status": outcome,
             "phase": "finish",
             "counts": counts,
-            "queries": [
-                {
-                    "source_query_id": row["query_id"],
-                    "status": row["status"],
-                    "error_class": row["error_class"],
-                    "attempted": bool(row["attempted"]),
-                }
-                for row in query_rows
-            ],
-            "error_class": "delivery_terminal" if terminal_error else run_error,
+            "queries": [],
+            "failure": None,
         }
+        for row in query_rows:
+            query = {
+                "source_query_revision_id": row["query_id"],
+                "status": row["status"],
+            }
+            error_class = row["error_class"]
+            if row["status"] != "completed" and not error_class:
+                error_class = "incomplete"
+            if error_class:
+                query["error_class"] = error_class
+            report["queries"].append(query)
+        failure_code = "delivery_terminal" if terminal_error else run_error
+        if outcome == "failed":
+            report["failure"] = {
+                "phase": run_row["phase"],
+                "code": failure_code or "invariant",
+            }
+        return report
 
     def freeze_report(self, run_id: str) -> Dict[str, Any]:
         report = self.derive(run_id)

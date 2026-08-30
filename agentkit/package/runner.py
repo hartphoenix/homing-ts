@@ -305,35 +305,32 @@ def reconcile_reports(state: State, client: Any) -> None:
     for row in state.unfinished_reports():
         if not row["report_body"]:
             continue
-        try:
-            server_id = row["server_run_id"]
-            if not server_id:
-                grouped: Dict[str, Dict[str, Any]] = {}
-                for query in state.db.execute(
-                    "SELECT * FROM run_queries WHERE run_id=? ORDER BY id", (row["id"],)
-                ):
-                    project = grouped.setdefault(
-                        query["project_id"],
-                        {
-                            "project_id": query["project_id"],
-                            "config_revision": query["prompt_revision"],
-                            "config_sha256": query["prompt_hash"],
-                            "source_queries": [],
-                        },
-                    )
-                    project["source_queries"].append(
-                        {
-                            "id": query["query_id"],
-                            "revision": query["query_revision"],
-                            "sha256": query["query_hash"],
-                        }
-                    )
-                server_id = client.create_run(row["id"], list(grouped.values()))
-                state.set_server_id(row["id"], server_id)
-            client.finish_run(server_id, json.loads(row["report_body"]))
-            state.acknowledge_report(row["id"])
-        except HomingError:
-            return
+        server_id = row["server_run_id"]
+        if not server_id:
+            grouped: Dict[str, Dict[str, Any]] = {}
+            for query in state.db.execute(
+                "SELECT * FROM run_queries WHERE run_id=? ORDER BY id", (row["id"],)
+            ):
+                project = grouped.setdefault(
+                    query["project_id"],
+                    {
+                        "project_id": query["project_id"],
+                        "config_revision": query["prompt_revision"],
+                        "config_sha256": query["prompt_hash"],
+                        "source_queries": [],
+                    },
+                )
+                project["source_queries"].append(
+                    {
+                        "id": query["query_id"],
+                        "revision": query["query_revision"],
+                        "sha256": query["query_hash"],
+                    }
+                )
+            server_id = client.create_run(row["id"], list(grouped.values()))
+            state.set_server_id(row["id"], server_id)
+        client.finish_run(server_id, json.loads(row["report_body"]))
+        state.acknowledge_report(row["id"])
 
 
 def run_once(
@@ -344,6 +341,7 @@ def run_once(
     acquire_port: Optional[Callable[[Dict[str, Any]], Any]] = None,
     matcher: Optional[Any] = None,
     crash_hook: Optional[Callable[[str], None]] = None,
+    projects_snapshot: Optional[list[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     now = now or datetime.now().astimezone()
     acquire_port = acquire_port or AcquisitionSubprocessPort(Path(__file__).resolve().parent)
@@ -358,11 +356,15 @@ def run_once(
             return {"status": "not_due"}
     invocation = str(uuid.uuid4())
     try:
-        projects = client.projects()
+        projects = projects_snapshot if projects_snapshot is not None else client.projects()
         refs, by_project = normalize_snapshot(projects)
     except HomingError as exc:
         if exc.kind == "paused":
             return {"status": "paused"}
+        if exc.kind in {"authentication", "permission"}:
+            return {"status": "disconnected"}
+        if exc.retryable:
+            return {"status": "unavailable"}
         started = (
             state.start_recovery(invocation, recovery["id"], due_date, [])
             if recovery is not None
@@ -399,6 +401,15 @@ def run_once(
             if exc.kind == "timeout"
             else "startup",
         )
+        query_error = (
+            "authentication"
+            if exc.kind in {"authentication", "permission"}
+            else "timeout"
+            if exc.kind == "timeout"
+            else "startup"
+        )
+        for query in state.pending_queries(invocation):
+            state.fail_query(query["id"], query_error)
         return state.freeze_report(invocation)
     state.set_server_id(invocation, server_id)
     if recovery is not None:
@@ -439,11 +450,8 @@ def run_once(
                 else "unavailable",
             )
         report = state.freeze_report(invocation)
-        try:
-            client.finish_run(server_id, report)
-            state.acknowledge_report(invocation)
-        except HomingError:
-            pass
+        client.finish_run(server_id, report)
+        state.acknowledge_report(invocation)
         return report
 
     state.phase(invocation, "acquire")
@@ -517,8 +525,12 @@ def run_once(
             )
             if crash_hook:
                 crash_hook("after_candidate_decision")
-        except (RuntimeError, ValueError, json.JSONDecodeError):
-            continue
+        except (RuntimeError, ValueError, json.JSONDecodeError) as exc:
+            error_class = str(exc) if isinstance(exc, RuntimeError) else "model_malformed"
+            if error_class not in {"model_failed", "model_malformed", "model_unavailable"}:
+                error_class = "model_malformed"
+            if not state.fail_match(invocation, candidate["observation_id"], error_class):
+                state.fail_run(invocation, error_class)
 
     state.phase(invocation, "deliver")
     kept = list(
@@ -609,11 +621,8 @@ def run_once(
             }.get(exc.kind, "pending")
             state.update_delivery(delivery["id"], status, reason=exc.kind)
     report = state.freeze_report(invocation)
-    try:
-        client.finish_run(server_id, report)
-        state.acknowledge_report(invocation)
-    except HomingError:
-        pass
+    client.finish_run(server_id, report)
+    state.acknowledge_report(invocation)
     return report
 
 
@@ -645,14 +654,39 @@ def main(argv: Optional[list[str]] = None) -> int:
             return 0
         client = HomingSubprocessClient(runtime)
         state.prune(datetime.now(timezone.utc).isoformat())
-        reconcile_reports(state, client)
         manifest = json.loads(
             (runtime.parent / "install-manifest.json").read_text(encoding="utf-8")
         )
         claude_executable = manifest["claude"]["executable"]
-        result = run_once(
-            state, client, args.mode, matcher=MatchSubprocessPort(runtime, claude_executable)
-        )
+        try:
+            try:
+                projects = client.projects()
+            except HomingError as exc:
+                if exc.kind == "paused":
+                    result = {"status": "paused"}
+                elif exc.kind in {"authentication", "permission"}:
+                    result = {"status": "disconnected"}
+                elif exc.retryable:
+                    result = {"status": "unavailable"}
+                else:
+                    result = run_once(
+                        state,
+                        client,
+                        args.mode,
+                        matcher=MatchSubprocessPort(runtime, claude_executable),
+                    )
+            else:
+                reconcile_reports(state, client)
+                result = run_once(
+                    state,
+                    client,
+                    args.mode,
+                    matcher=MatchSubprocessPort(runtime, claude_executable),
+                    projects_snapshot=projects,
+                )
+        except HomingError as exc:
+            print(json.dumps({"status": "error", "phase": "finish", "error": exc.kind}))
+            return 2
         print(json.dumps(result, sort_keys=True))
         return (
             0
