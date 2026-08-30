@@ -118,6 +118,106 @@ export const agentRunReportSchema = z
   })
   .strict();
 
+export const protocolVersionSchema = z.union([z.literal(2), z.literal("v2")]);
+
+export const v2PairingRequestSchema = z
+  .object({
+    protocol_version: protocolVersionSchema,
+    agent_label: z.string().trim().min(1).max(120),
+    environment_note: z.string().trim().max(200).optional(),
+    requested_cadence_minutes: z.number().int().min(1).max(10_080).nullable().optional(),
+  })
+  .strict();
+
+export const v2SourceQueryInputSchema = z
+  .object({
+    adapter: sourceAdapterSchema,
+    query: objectSchema,
+  })
+  .strict();
+
+export const v2ConfigCreateSchema = z
+  .object({
+    expected_revision: z.number().int().nonnegative().nullable().optional(),
+    prompt: z.string().max(100_000),
+    criteria: objectSchema,
+    required_evidence: z.array(requiredEvidenceKeySchema).min(1).max(requiredEvidenceKeys.length),
+    acquisition_basis: objectSchema,
+    source_queries: z.array(v2SourceQueryInputSchema).min(1).max(8),
+  })
+  .strict();
+
+export const v2RunProjectSchema = z
+  .object({
+    project_id: z.string().uuid(),
+    prompt_revision_id: z.number().int().positive(),
+    prompt_revision: z.number().int().positive(),
+    canonical_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+    queries: z
+      .array(
+        z
+          .object({
+            source_query_revision_id: z.string().uuid(),
+            source_query_revision: z.number().int().positive(),
+            canonical_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+          })
+          .strict(),
+      )
+      .max(8),
+  })
+  .strict();
+
+export const v2RunCreateSchema = z
+  .object({
+    invocation_id: z.string().uuid(),
+    agent_label: z.string().trim().min(1).max(160),
+    projects: z.array(v2RunProjectSchema).min(1).max(100),
+  })
+  .strict();
+
+export const v2DeliveryLeadSchema = z
+  .object({
+    source: sourceAdapterSchema,
+    source_listing_id: z.string().trim().min(1).max(300),
+    canonical_url: z.string().url().max(2_000),
+    title: z.string().max(500),
+    summary: z.string().max(10_000),
+    location: z.string().max(500),
+    price_display: z.string().max(200),
+    price_amount: z
+      .string()
+      .regex(/^\d+(\.\d{1,2})?$/)
+      .nullable(),
+    price_currency: z.string().regex(/^[A-Z]{3}$/),
+    availability: z.string().max(500),
+    housing_type: z.enum(["entire", "shared", "unknown"]),
+    listed_at: z.string().date().nullable(),
+    attributes: objectSchema,
+    verification_notes: z.string().max(5_000),
+  })
+  .strict();
+
+export const v2DeliverySchema = z
+  .object({
+    prompt_revision_id: z.number().int().positive(),
+    facts_hash: z.string().regex(/^[0-9a-f]{64}$/),
+    disposition: z.literal("kept"),
+    reason: z.string().max(500),
+    unknowns: z.array(z.string().max(120)).max(requiredEvidenceKeys.length),
+    lead: v2DeliveryLeadSchema,
+  })
+  .strict();
+
+export const v2PauseSchema = z
+  .object({
+    paused: z.boolean().optional(),
+    paused_until: z.string().datetime({ offset: true }).nullable().optional(),
+  })
+  .strict()
+  .refine((value) => value.paused !== undefined || value.paused_until !== undefined, {
+    message: "paused or paused_until is required",
+  });
+
 export type RequiredEvidenceKey = (typeof requiredEvidenceKeys)[number];
 export type SourceAdapter = z.infer<typeof sourceAdapterSchema>;
 export type EvidenceState = z.infer<typeof evidenceStateSchema>;

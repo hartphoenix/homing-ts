@@ -5,6 +5,7 @@ import { bodyLimit } from "hono/body-limit";
 import { requestId } from "hono/request-id";
 import { secureHeaders } from "hono/secure-headers";
 import { type AgentCoreRouterOptions, createAgentCoreRouter } from "./agent/router";
+import { createV2Router, type V2RouterDependencies } from "./agent/v2/router";
 import {
   type AuthContext,
   type AuthRouterDependencies,
@@ -23,6 +24,7 @@ type AppDependencies = {
   ready?: () => Promise<boolean>;
   spaIndex?: () => Response | Promise<Response>;
   auth?: AuthRouterDependencies;
+  v2?: Omit<V2RouterDependencies, "auth">;
   agent?: Omit<AgentCoreRouterOptions, "principal">;
   collaboration?: Omit<CollaborationDependencies, "principal">;
 };
@@ -106,6 +108,9 @@ export function createApp(dependencies: AppDependencies = {}) {
   });
 
   if (dependencies.auth) {
+    if (dependencies.v2) {
+      app.route("/api/v1", createV2Router({ ...dependencies.v2, auth: dependencies.auth }));
+    }
     app.route("/api/v1", createAuthRouter(dependencies.auth));
 
     const authenticated = async (context: AuthContext) => {

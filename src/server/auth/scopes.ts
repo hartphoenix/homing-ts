@@ -12,8 +12,17 @@ export const AGENT_SCOPES = [
   "runs:write",
 ] as const;
 
-export type AgentScope = (typeof AGENT_SCOPES)[number];
+export const V2_AGENT_SCOPES = [
+  "agent-config:read",
+  "source-config:write",
+  "agent-runs:write",
+  "agent-deliveries:write",
+  "connection:self",
+] as const;
+
+export type AgentScope = (typeof AGENT_SCOPES | typeof V2_AGENT_SCOPES)[number];
 export const AGENT_SCOPE_SET: ReadonlySet<string> = new Set(AGENT_SCOPES);
+export const V2_AGENT_SCOPE_SET: ReadonlySet<string> = new Set(V2_AGENT_SCOPES);
 
 /** Pairing is deliberately non-destructive. Human-created keys may opt into trash/restore. */
 export const PAIRED_AGENT_SCOPES = AGENT_SCOPES.filter((scope) => scope !== "leads:destroy");

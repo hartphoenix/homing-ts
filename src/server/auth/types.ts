@@ -1,5 +1,7 @@
 import type { AgentScope } from "./scopes";
 
+export type AgentProtocolVersion = "v1" | "v2";
+
 export type AuthUser = {
   id: number;
   email: string;
@@ -14,6 +16,7 @@ export type AuthProfile = {
   timezone: string;
   bio: string;
   personalDetails: Record<string, unknown>;
+  agentPausedUntil?: Date | null;
 };
 
 export type SessionRecord = {
@@ -35,6 +38,7 @@ export type AgentTokenRecord = {
   expectedCadenceMinutes: number | null;
   environmentNote: string;
   exposedToChat: boolean;
+  sourceWriteExpiresAt?: Date | null;
   expiresAt: Date;
   revokedAt: Date | null;
   lastUsedAt: Date | null;
@@ -50,6 +54,7 @@ export type AgentLinkRecord = {
   agentLabel: string;
   environmentNote: string;
   requestedCadenceMinutes: number | null;
+  protocolVersion?: AgentProtocolVersion;
   status: AgentLinkStatus;
   expiresAt: Date;
   intervalSeconds: number;
@@ -87,14 +92,27 @@ export type CreateSessionInput = {
   expiresAt: Date;
 };
 
-export type CreateTokenInput = Omit<AgentTokenRecord, "createdAt" | "lastUsedAt" | "revokedAt"> & {
+export type CreateTokenInput = Omit<
+  AgentTokenRecord,
+  "createdAt" | "lastUsedAt" | "revokedAt" | "sourceWriteExpiresAt"
+> & {
   createdAt?: Date;
+  sourceWriteExpiresAt?: Date | null;
 };
 
 export type CreateAgentLinkInput = Omit<
   AgentLinkRecord,
-  "id" | "createdAt" | "status" | "pollCount" | "lastPolledAt" | "approvedById" | "issuedTokenId"
->;
+  | "id"
+  | "createdAt"
+  | "status"
+  | "pollCount"
+  | "lastPolledAt"
+  | "approvedById"
+  | "issuedTokenId"
+  | "protocolVersion"
+> & {
+  protocolVersion?: AgentProtocolVersion;
+};
 
 export type InvitationRecord = {
   id: string;

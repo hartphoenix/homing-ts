@@ -1,0 +1,156 @@
+import type { AgentTokenRecord, Principal } from "../../auth/types";
+import { HomingError } from "../../http";
+import { canonicalJsonBytes, canonicalJsonSha256 } from "./canonical";
+import { sourceQueryIdentity } from "./identities";
+import { assertAgentRunReport } from "./outcomes";
+import type {
+  CreateConfigInput,
+  CreateRunInput,
+  DeliverInput,
+  V2ConfigRevision,
+  V2Repository,
+} from "./repository";
+import type { v2ConfigCreateSchema, v2DeliverySchema, v2RunCreateSchema } from "./schemas";
+
+type V2ConfigCreate = import("zod").infer<typeof v2ConfigCreateSchema>;
+type V2Delivery = import("zod").infer<typeof v2DeliverySchema>;
+type V2RunCreate = import("zod").infer<typeof v2RunCreateSchema>;
+
+export class V2Service {
+  constructor(private readonly repository: V2Repository) {}
+
+  requireAgent(principal: Principal): AgentTokenRecord {
+    if (principal.kind !== "agent" || !principal.token) {
+      throw new HomingError("forbidden", "A v2 bearer token is required.", 403);
+    }
+    return principal.token;
+  }
+
+  requireScope(principal: Principal, scope: string): AgentTokenRecord {
+    const token = this.requireAgent(principal);
+    if (!token.scopes.includes(scope as (typeof token.scopes)[number])) {
+      throw new HomingError("forbidden", "Token lacks the required v2 scope.", 403, { scope });
+    }
+    return token;
+  }
+
+  requireSourceWrite(principal: Principal, now: Date): AgentTokenRecord {
+    const token = this.requireScope(principal, "source-config:write");
+    if (!token.sourceWriteExpiresAt || token.sourceWriteExpiresAt <= now) {
+      throw new HomingError(
+        "source_refresh_required",
+        "Attended source configuration authority has expired.",
+        403,
+      );
+    }
+    return token;
+  }
+
+  async createConfig(
+    userId: number,
+    projectId: string,
+    body: V2ConfigCreate,
+  ): Promise<V2ConfigRevision> {
+    const acquisitionBasisHash = canonicalJsonSha256(body.acquisition_basis);
+    const sourceQueries = body.source_queries.map((source) => {
+      const queryIdentity = sourceQueryIdentity(projectId, source.adapter, source.query);
+      const payload = {
+        version: 1,
+        adapter: source.adapter,
+        query: source.query,
+        acquisition_basis_hash: acquisitionBasisHash,
+      };
+      const canonicalBytes = canonicalJsonBytes(payload);
+      return {
+        adapter: source.adapter,
+        normalizedQuery: source.query,
+        queryIdentity,
+        acquisitionBasisHash,
+        canonicalBytes,
+        canonicalSha256: canonicalJsonSha256(payload),
+      };
+    });
+    const input: CreateConfigInput = {
+      userId,
+      projectId,
+      expectedRevision: body.expected_revision ?? null,
+      prompt: body.prompt,
+      criteria: body.criteria,
+      requiredEvidence: body.required_evidence,
+      acquisitionBasis: body.acquisition_basis,
+      sourceQueries,
+    };
+    return this.repository.createConfigRevision(input);
+  }
+
+  async createRun(userId: number, tokenId: string, body: V2RunCreate) {
+    const input: CreateRunInput = {
+      userId,
+      tokenId,
+      invocationId: body.invocation_id,
+      agentLabel: body.agent_label,
+      projects: body.projects.map((project) => ({
+        projectId: project.project_id,
+        promptRevisionId: project.prompt_revision_id,
+        promptRevision: project.prompt_revision,
+        canonicalSha256: project.canonical_sha256,
+        queries: project.queries.map((query) => ({
+          sourceQueryRevisionId: query.source_query_revision_id,
+          sourceQueryRevision: query.source_query_revision,
+          canonicalSha256: query.canonical_sha256,
+        })),
+      })),
+    };
+    return this.repository.createRun(input);
+  }
+
+  async finalizeRun(userId: number, tokenId: string, runId: string, report: unknown) {
+    let value: ReturnType<typeof assertAgentRunReport>;
+    try {
+      value = assertAgentRunReport(report);
+    } catch (error) {
+      throw new HomingError("validation_error", "The run report violates v2 invariants.", 422, {
+        issues: error instanceof Error ? error.message.split("; ") : [],
+      });
+    }
+    return this.repository.finalizeRun(userId, tokenId, runId, value);
+  }
+
+  async deliver(userId: number, tokenId: string, projectId: string, body: V2Delivery) {
+    const input: DeliverInput = {
+      userId,
+      tokenId,
+      projectId,
+      promptRevisionId: body.prompt_revision_id,
+      factsHash: body.facts_hash,
+      disposition: body.disposition,
+      reason: body.reason,
+      unknowns: body.unknowns,
+      lead: {
+        source: body.lead.source,
+        sourceListingId: body.lead.source_listing_id,
+        canonicalUrl: body.lead.canonical_url,
+        title: body.lead.title,
+        summary: body.lead.summary,
+        location: body.lead.location,
+        priceDisplay: body.lead.price_display,
+        priceAmount: body.lead.price_amount,
+        priceCurrency: body.lead.price_currency,
+        availability: body.lead.availability,
+        housingType: body.lead.housing_type,
+        listedAt: body.lead.listed_at,
+        attributes: body.lead.attributes,
+        verificationNotes: body.lead.verification_notes,
+      },
+    };
+    return this.repository.deliver(input);
+  }
+
+  async getConfig(userId: number, projectId: string, revision: number) {
+    return this.repository.getConfigRevision(userId, projectId, revision);
+  }
+
+  async getSourceQuery(userId: number, projectId: string, queryId: string) {
+    return this.repository.getSourceQueryRevision(userId, projectId, queryId);
+  }
+}
