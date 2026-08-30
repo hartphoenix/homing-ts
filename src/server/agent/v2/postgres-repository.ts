@@ -246,13 +246,15 @@ function validateRunSnapshotShape(projects: RunSnapshotProject[]): void {
   const projectIds = new Set<string>();
   const queryIds = new Set<string>();
   for (const project of projects) {
-    if (!projectIds.add(project.projectId)) {
+    if (projectIds.has(project.projectId)) {
       conflict("A run may snapshot each project only once.");
     }
+    projectIds.add(project.projectId);
     for (const query of project.queries) {
-      if (!queryIds.add(query.sourceQueryRevisionId)) {
+      if (queryIds.has(query.sourceQueryRevisionId)) {
         conflict("A run may snapshot each source-query revision only once.");
       }
+      queryIds.add(query.sourceQueryRevisionId);
     }
   }
 }
