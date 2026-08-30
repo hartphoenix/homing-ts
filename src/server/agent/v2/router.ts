@@ -43,6 +43,10 @@ function nowOf(deps: V2RouterDependencies): Date {
   return deps.now?.() ?? deps.auth.now?.() ?? new Date();
 }
 
+function activePause(until: Date | null | undefined, now: Date): Date | null {
+  return until && until > now ? until : null;
+}
+
 function requestIdOf(context: V2Context): string {
   try {
     return context.get("requestId") || context.req.header("X-Request-ID") || "";
@@ -347,6 +351,7 @@ export function createV2Router(deps: V2RouterDependencies) {
         return;
       }
       const profile = await deps.auth.repo.findProfileByUserId(principal.user.id);
+      const pausedUntil = activePause(profile?.agentPausedUntil, nowOf(deps));
       return context.json({
         protocol_version: 2,
         id: principal.token.id,
@@ -354,7 +359,7 @@ export function createV2Router(deps: V2RouterDependencies) {
         expires_at: principal.token.expiresAt.toISOString(),
         scopes: principal.token.scopes,
         source_write_expires_at: principal.token.sourceWriteExpiresAt?.toISOString() ?? null,
-        agent_paused_until: profile?.agentPausedUntil?.toISOString() ?? null,
+        agent_paused_until: pausedUntil?.toISOString() ?? null,
       });
     }),
   );
@@ -366,11 +371,13 @@ export function createV2Router(deps: V2RouterDependencies) {
       const token =
         principal.kind === "agent" ? service.requireScope(principal, "agent-config:read") : null;
       const profile = await deps.auth.repo.findProfileByUserId(principal.user.id);
-      const projects = await deps.repository.listProjects(principal.user.id);
+      const now = nowOf(deps);
+      const pausedUntil = activePause(profile?.agentPausedUntil, now);
+      const projects = await deps.repository.listProjects(principal.user.id, now);
       return context.json({
         protocol_version: 2,
-        agent_paused_until: profile?.agentPausedUntil?.toISOString() ?? null,
-        paused_until: profile?.agentPausedUntil?.toISOString() ?? null,
+        agent_paused_until: pausedUntil?.toISOString() ?? null,
+        paused_until: pausedUntil?.toISOString() ?? null,
         projects: projects.map((project: V2ProjectSummary) => ({
           project_id: project.id,
           name: project.name,
@@ -379,10 +386,11 @@ export function createV2Router(deps: V2RouterDependencies) {
           current_config_revision: project.configRevision,
           config_revision: project.configRevision,
           config_sha256: project.configSha256,
+          acquisition_basis: project.acquisitionBasis,
           required_evidence: project.requiredEvidence,
           source_queries: project.sourceQueries,
           latest_run: project.latestRun,
-          paused_until: project.pausedUntil?.toISOString() ?? null,
+          paused_until: activePause(project.pausedUntil, now)?.toISOString() ?? null,
         })),
         scopes: token?.scopes ?? [],
       });

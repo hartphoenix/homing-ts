@@ -293,7 +293,7 @@ function queryInputEqual(row: Row, input: ConfigSourceQueryInput): boolean {
 export class PostgresV2Repository implements V2Repository {
   constructor(private readonly db: Database = getDatabase()) {}
 
-  async listProjects(userId: number): Promise<V2ProjectSummary[]> {
+  async listProjects(userId: number, now = new Date()): Promise<V2ProjectSummary[]> {
     const rows = await this.db
       .select({
         id: projects.id,
@@ -303,6 +303,7 @@ export class PostgresV2Repository implements V2Repository {
         configRevision: promptRevisions.revision,
         configRevisionId: promptRevisions.id,
         configSha256: promptRevisions.canonicalSha256,
+        acquisitionBasis: promptRevisions.acquisitionBasis,
         requiredEvidence: promptRevisions.requiredEvidence,
         prompt: projects.currentPrompt,
         criteria: projects.criteria,
@@ -330,6 +331,7 @@ export class PostgresV2Repository implements V2Repository {
                 adapter: sourceQueryRevisions.adapter,
                 status: sourceQueryRevisions.status,
                 sha256: sourceQueryRevisions.canonicalSha256,
+                query: sourceQueryRevisions.normalizedQuery,
               })
               .from(promptRevisionSourceQueries)
               .innerJoin(
@@ -362,11 +364,12 @@ export class PostgresV2Repository implements V2Repository {
           configSha256: row.configSha256 ?? null,
           prompt: row.prompt,
           criteria: row.criteria,
+          acquisitionBasis: row.acquisitionBasis ?? null,
           requiredEvidence: stringArray(
             row.requiredEvidence,
           ) as V2ProjectSummary["requiredEvidence"],
           sourceQueries: sourceRows,
-          pausedUntil: row.pausedUntil ?? null,
+          pausedUntil: row.pausedUntil && row.pausedUntil > now ? row.pausedUntil : null,
           latestRun: latestRow
             ? {
                 status: runStatus(latestRow.agent_runs.status),

@@ -11,6 +11,7 @@ export type V2ProjectSummary = {
   configSha256: string | null;
   prompt: string;
   criteria: Record<string, unknown>;
+  acquisitionBasis: Record<string, unknown> | null;
   requiredEvidence: RequiredEvidenceKey[];
   sourceQueries: Array<{
     id: string;
@@ -18,6 +19,7 @@ export type V2ProjectSummary = {
     adapter: SourceAdapter;
     status: "needs_review" | "ready";
     sha256: string;
+    query: Record<string, unknown>;
   }>;
   pausedUntil: Date | null;
   latestRun: Pick<V2RunRecord, "status" | "phase" | "report"> | null;
@@ -137,7 +139,7 @@ export type DeliverResult = {
 };
 
 export interface V2Repository {
-  listProjects(userId: number): Promise<V2ProjectSummary[]>;
+  listProjects(userId: number, now?: Date): Promise<V2ProjectSummary[]>;
   getConfigRevision(
     userId: number,
     projectId: string,

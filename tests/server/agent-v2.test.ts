@@ -55,7 +55,7 @@ const queryId = "33333333-3333-4333-8333-333333333333";
 const runId = "44444444-4444-4444-8444-444444444444";
 const hash = sha256Hex(new TextEncoder().encode('{"version":1}'));
 
-function build() {
+function build(profileOverride: AuthProfile = profile) {
   const configBytes = new TextEncoder().encode('{"version":1}');
   const calls: { config?: Record<string, unknown>; report?: unknown; delivery?: unknown } = {};
   const config = {
@@ -85,9 +85,17 @@ function build() {
         configSha256: hash,
         prompt: "Find a home",
         criteria: {},
+        acquisitionBasis: { locations: ["Brooklyn"] },
         requiredEvidence: ["location", "price", "availability", "housing_type"],
         sourceQueries: [
-          { id: queryId, revision: 1, adapter: "zumper-com", status: "ready", sha256: hash },
+          {
+            id: queryId,
+            revision: 1,
+            adapter: "zumper-com",
+            status: "ready",
+            sha256: hash,
+            query: { url: "https://www.zumper.com/homes/brooklyn" },
+          },
         ],
         pausedUntil: null,
         latestRun: null,
@@ -157,7 +165,7 @@ function build() {
   const auth = {
     getTokenByDigest: async (digest: string) => (digest === token.digest ? token : null),
     findUserById: async (id: number) => (id === user.id ? user : null),
-    findProfileByUserId: async () => profile,
+    findProfileByUserId: async () => profileOverride,
     touchToken: async () => {},
     revokeToken: async () => true,
   } as unknown as AuthRepository;
@@ -184,6 +192,19 @@ describe("v2 server contract", () => {
       headers: { ...authHeader, "If-None-Match": `"sha256-${hash}"` },
     });
     expect(second.status).toBe(304);
+  });
+
+  test("does not report an expired pause as active", async () => {
+    const { router } = build({
+      ...profile,
+      agentPausedUntil: new Date("2026-08-28T00:00:00.000Z"),
+    });
+    const projects = await router.request("/agent/projects", { headers: authHeader });
+    expect(projects.status).toBe(200);
+    expect(await projects.json()).toMatchObject({ agent_paused_until: null, paused_until: null });
+    const token = await router.request("/me/token", { headers: authHeader });
+    expect(token.status).toBe(200);
+    expect(await token.json()).toMatchObject({ agent_paused_until: null });
   });
 
   test("canonicalizes attended config input before repository persistence", async () => {
