@@ -10,9 +10,13 @@ import type {
   V2ConfigRevision,
   V2Repository,
 } from "./repository";
-import type { v2ConfigCreateSchema, v2WireDeliverySchema, v2WireRunCreateSchema } from "./schemas";
+import type {
+  v2WireConfigCreateSchema,
+  v2WireDeliverySchema,
+  v2WireRunCreateSchema,
+} from "./schemas";
 
-type V2ConfigCreate = import("zod").infer<typeof v2ConfigCreateSchema>;
+type V2ConfigCreate = import("zod").infer<typeof v2WireConfigCreateSchema>;
 type V2Delivery = import("zod").infer<typeof v2WireDeliverySchema>;
 type V2RunCreate = import("zod").infer<typeof v2WireRunCreateSchema>;
 
@@ -51,6 +55,10 @@ export class V2Service {
     projectId: string,
     body: V2ConfigCreate,
   ): Promise<V2ConfigRevision> {
+    // The client intentionally omits prompt and criteria. The repository resolves them while
+    // holding the project lock so a concurrent brief edit cannot produce a mixed revision.
+    const prompt = "prompt" in body ? body.prompt : undefined;
+    const criteria = "prompt" in body ? body.criteria : undefined;
     const acquisitionBasisHash = canonicalJsonSha256(body.acquisition_basis);
     const sourceQueries = body.source_queries.map((source) => {
       const queryIdentity = sourceQueryIdentity(projectId, source.adapter, source.query);
@@ -74,11 +82,11 @@ export class V2Service {
       userId,
       projectId,
       expectedRevision: body.expected_revision ?? null,
-      prompt: body.prompt,
-      criteria: body.criteria,
       requiredEvidence: body.required_evidence,
       acquisitionBasis: body.acquisition_basis,
       sourceQueries,
+      ...(prompt === undefined ? {} : { prompt }),
+      ...(criteria === undefined ? {} : { criteria }),
     };
     return this.repository.createConfigRevision(input);
   }

@@ -424,6 +424,8 @@ export class PostgresV2Repository implements V2Repository {
           actual_revision: project.promptRevision,
         });
       }
+      const prompt = input.prompt ?? project.currentPrompt;
+      const criteria = input.criteria ?? project.criteria;
       const queryIds = new Set<string>();
       const queryRefs: Array<{ id: string; revision: number; sha256: string; position: number }> =
         [];
@@ -494,8 +496,8 @@ export class PostgresV2Repository implements V2Repository {
       const revision = project.promptRevision + 1;
       const payload = {
         version: 1,
-        prompt: input.prompt,
-        criteria: input.criteria,
+        prompt,
+        criteria,
         required_evidence: input.requiredEvidence,
         acquisition_basis: input.acquisitionBasis,
         source_queries: queryRefs,
@@ -507,8 +509,8 @@ export class PostgresV2Repository implements V2Repository {
         .values({
           projectId: input.projectId,
           revision,
-          prompt: input.prompt,
-          criteria: input.criteria,
+          prompt,
+          criteria,
           configStatus: "complete",
           requiredEvidence: input.requiredEvidence,
           acquisitionBasis: input.acquisitionBasis,
@@ -528,8 +530,8 @@ export class PostgresV2Repository implements V2Repository {
       await transaction
         .update(projects)
         .set({
-          currentPrompt: input.prompt,
-          criteria: input.criteria,
+          currentPrompt: prompt,
+          criteria,
           promptRevision: revision,
           currentConfigRevisionId: created.id,
           updatedAt: new Date(),

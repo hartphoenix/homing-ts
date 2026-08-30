@@ -229,6 +229,7 @@ export interface CollaborationRepository {
     prompt: string,
     criteria: Record<string, unknown>,
     editorId: number,
+    acquisitionBasis?: Record<string, unknown>,
   ): Promise<{ project: ProjectRecord; revision: PromptRevisionRecord }>;
 
   listLeads(

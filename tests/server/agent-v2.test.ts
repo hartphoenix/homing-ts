@@ -208,6 +208,23 @@ describe("v2 server contract", () => {
     expect(sourceQueries?.[0]?.canonicalSha256).toMatch(/^[0-9a-f]{64}$/);
   });
 
+  test("accepts the reviewed client config shape and uses the server project brief", async () => {
+    const { router, calls } = build();
+    const response = await router.request(`/projects/${projectId}/config-revisions`, {
+      method: "POST",
+      headers: { ...authHeader, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        expected_revision: 1,
+        required_evidence: ["location", "price", "availability", "housing_type"],
+        acquisition_basis: { location: "Brooklyn" },
+        source_queries: [{ adapter: "zumper-com", query: { location: "Brooklyn" } }],
+      }),
+    });
+    expect(response.status).toBe(201);
+    expect(calls.config).not.toHaveProperty("prompt");
+    expect(calls.config).not.toHaveProperty("criteria");
+  });
+
   test("validates terminal run outcomes and records additive delivery", async () => {
     const { router, calls } = build();
     const run = await router.request("/agent-runs", {
@@ -345,6 +362,8 @@ projects = client.projects()
 assert len(projects) == 1
 project = projects[0]
 project_id = project["project_id"]
+created_config = client.create_config(project_id, {"expected_revision": project["current_config_revision"], "required_evidence": ["location", "price", "availability", "housing_type"], "acquisition_basis": {"locations": ["Brooklyn"]}, "source_queries": [{"adapter": "zumper-com", "query": {"url": "https://www.zumper.com/homes/brooklyn"}}]})
+assert created_config["config_status"] in {"complete", "needs_review"}
 config = client.config_revision(project_id, str(project["current_config_revision"]), project["config_sha256"])
 query = project["source_queries"][0]
 source = client.source_revision(project_id, str(query["id"]), query["sha256"])

@@ -58,8 +58,9 @@ export type CreateConfigInput = {
   userId: number;
   projectId: string;
   expectedRevision: number | null;
-  prompt: string;
-  criteria: Record<string, unknown>;
+  /** Optional for the reviewed client shape; the repository reads these under its project lock. */
+  prompt?: string;
+  criteria?: Record<string, unknown>;
   requiredEvidence: RequiredEvidenceKey[];
   acquisitionBasis: Record<string, unknown>;
   sourceQueries: ConfigSourceQueryInput[];

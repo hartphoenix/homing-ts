@@ -16,6 +16,7 @@ import {
   PostgresAgentRepository,
 } from "../../src/server/agent/postgres-repository";
 import { type AgentPrincipal, digest, RunService } from "../../src/server/agent/runs";
+import { canonicalJsonBytes, canonicalJsonSha256 } from "../../src/server/agent/v2/canonical";
 import { DrizzleAuthRepository } from "../../src/server/auth/drizzle-repository";
 import { verifyImportedPassword } from "../../src/server/auth/password";
 import { PostgresCollaborationRepository } from "../../src/server/collaboration/postgres-repository";
@@ -204,6 +205,89 @@ describePostgres("PostgreSQL concurrency invariants", () => {
     expect(promptChanges.filter((result) => result.status === "rejected")).toHaveLength(1);
     expect((await collaboration.getProject(projectId))?.promptRevision).toBe(2);
     expect(await collaboration.listPromptRevisions(projectId)).toHaveLength(2);
+  });
+
+  it("keeps the current v2 configuration aligned across text and acquisition edits", async () => {
+    const sourceQuery = { url: "https://www.zumper.com/homes/brooklyn" };
+    const acquisitionBasis = { locations: ["Brooklyn"] };
+    const sourcePayload = {
+      version: 1,
+      adapter: "zumper-com",
+      query: sourceQuery,
+      acquisition_basis_hash: canonicalJsonSha256(acquisitionBasis),
+    };
+    const sourceBytes = canonicalJsonBytes(sourcePayload);
+    const configPayload = {
+      version: 1,
+      prompt: "Find a place",
+      criteria: { city: "Brooklyn" },
+      required_evidence: ["location", "price", "availability", "housing_type"],
+      acquisition_basis: acquisitionBasis,
+      source_queries: [],
+    };
+    const [source] = await sqlClient`
+      insert into source_query_revisions
+        (project_id, adapter, revision, normalized_query, query_identity,
+         acquisition_basis_hash, canonical_bytes, canonical_sha256, status)
+      values
+        (${projectId}, 'zumper-com', 1, ${JSON.stringify(sourceQuery)}::jsonb,
+         ${canonicalJsonSha256({ project_id: projectId, adapter: "zumper-com", query: sourceQuery })},
+         ${canonicalJsonSha256(acquisitionBasis)}, ${sourceBytes}, ${canonicalJsonSha256(sourcePayload)}, 'ready')
+      returning id
+    `;
+    const configWithRef = {
+      ...configPayload,
+      source_queries: [
+        { id: source?.id, revision: 1, sha256: canonicalJsonSha256(sourcePayload), position: 0 },
+      ],
+    };
+    const configBytes = canonicalJsonBytes(configWithRef);
+    const [config] = await sqlClient`
+      insert into prompt_revisions
+        (project_id, revision, prompt, criteria, config_status, required_evidence,
+         acquisition_basis, canonical_bytes, canonical_sha256, editor_id)
+      values
+        (${projectId}, 2, 'Find a place', ${JSON.stringify({ city: "Brooklyn" })}::jsonb, 'complete',
+         ${JSON.stringify(configPayload.required_evidence)}::jsonb,
+         ${JSON.stringify(acquisitionBasis)}::jsonb, ${configBytes}, ${canonicalJsonSha256(configWithRef)}, 1)
+      returning id
+    `;
+    await sqlClient`
+      insert into prompt_revision_source_queries (prompt_revision_id, source_query_revision_id, position)
+      values (${config?.id}, ${source?.id}, 0)
+    `;
+    await sqlClient`
+      update projects set prompt_revision = 2, current_config_revision_id = ${config?.id}
+      where id = ${projectId}
+    `;
+
+    const textEdit = await collaboration.transaction((transaction) =>
+      transaction.updatePrompt(projectId, 2, "Find a place with transit", { city: "Brooklyn" }, 1),
+    );
+    expect(textEdit.revision.revision).toBe(3);
+    const [textConfig] = await sqlClient`
+      select config_status, canonical_sha256, required_evidence, acquisition_basis
+        from prompt_revisions where id = (select current_config_revision_id from projects where id = ${projectId})
+    `;
+    expect(textConfig?.config_status).toBe("complete");
+    expect(textConfig?.required_evidence).toEqual(configPayload.required_evidence);
+
+    const acquisitionEdit = await collaboration.transaction((transaction) =>
+      transaction.updatePrompt(projectId, 3, "Find a place with transit", { city: "Queens" }, 1),
+    );
+    expect(acquisitionEdit.revision.revision).toBe(4);
+    const [reviewConfig] = await sqlClient`
+      select config_status from prompt_revisions
+       where project_id = ${projectId} and revision = 4
+    `;
+    const reviewSources = await sqlClient`
+      select source.status
+        from prompt_revision_source_queries link
+        join source_query_revisions source on source.id = link.source_query_revision_id
+       where link.prompt_revision_id = (select id from prompt_revisions where project_id = ${projectId} and revision = 4)
+    `;
+    expect(reviewConfig?.config_status).toBe("needs_review");
+    expect(reviewSources).toEqual([{ status: "needs_review" }]);
   });
 
   it("linearizes membership revocation before a content authorization check", async () => {

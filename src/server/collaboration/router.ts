@@ -67,6 +67,7 @@ const promptSchema = z
   .object({
     prompt: z.string().max(30_000),
     criteria,
+    acquisition_basis: criteria.optional(),
     expected_revision: z.number().int().min(0).max(2_147_483_647),
   })
   .strict();
@@ -802,6 +803,7 @@ export function createCollaborationRouter(dependencies: CollaborationDependencie
           body.prompt,
           body.criteria,
           principal.userId,
+          body.acquisition_basis,
         );
         await transaction.recordMutation(
           projectId,

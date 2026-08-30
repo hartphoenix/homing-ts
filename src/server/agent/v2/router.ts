@@ -22,9 +22,9 @@ import { normalizeUuid } from "./identities";
 import type { V2ProjectSummary, V2Repository, V2RunRecord } from "./repository";
 import {
   protocolVersionSchema,
-  v2ConfigCreateSchema,
   v2PairingRequestSchema,
   v2PauseSchema,
+  v2WireConfigCreateSchema,
   v2WireDeliverySchema,
   v2WireRunCreateSchema,
 } from "./schemas";
@@ -394,7 +394,7 @@ export function createV2Router(deps: V2RouterDependencies) {
     withErrors(async (context) => {
       const principal = await resolvePrincipal(context, deps.auth);
       const token = service.requireSourceWrite(principal, nowOf(deps));
-      const body = parseBody(v2ConfigCreateSchema, await jsonBody(context));
+      const body = parseBody(v2WireConfigCreateSchema, await jsonBody(context));
       const revision = await service.createConfig(
         principal.user.id,
         pathUuid(context, "project"),
