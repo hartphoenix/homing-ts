@@ -501,7 +501,7 @@ describe("reviewed Python client wire contract", () => {
     const { repository, auth } = build();
     const app = createApp({
       auth: { repo: auth, origin: "https://homing.test" },
-      v2: { repository },
+      v2: { repository, now: () => new Date("2026-08-29T00:00:00.000Z") },
       spaIndex: () => new Response("spa"),
     });
     const packagePath = `${process.cwd()}/agentkit/package`;
