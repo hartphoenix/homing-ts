@@ -28,7 +28,6 @@ test("invites, renders pending rows, and gives owners removal controls", async (
           timezone: "America/New_York",
           bio: "",
           details: {},
-          agent_paused_until: null,
         },
       }),
     });

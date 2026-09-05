@@ -48,3 +48,48 @@ was exposed.
 The Django suite was run once without its cache provider: 302 tests and 450 subtests passed in
 61.98 seconds. It is behavioral evidence, not a replacement acceptance gate, and will not be
 ported wholesale.
+
+## v2 port qualification record — 2026-08-29
+
+The recorded production baseline before the port was commit `e66cb23`, image
+`sha256:a34b7cbbd526e9928c448f935df48da2c5c58bbbfb7e0430f7cd413b9727f13a`, verified healthy, with
+served manifest digest
+`a8ff9195f2c0719c5f24052010377a58d1853a948769e8d7ac2611672c88a8ba`.
+
+Completed local evidence:
+
+- The reviewed vendored runner passed all 53 reviewed core tests through the import-remap harness;
+  its source artifact digest was
+  `7b8ceaa4152c7945d5b16cebaadf905cdc1d5639bd7e107008c5cb6054781c42`.
+- The real vendored Python client passed 4/4 Hono contract scenarios: discovery, exact-byte reads,
+  run creation/finalization, delivery, introspection, and disconnect.
+- The TypeScript-built production-origin package is version 2 with 19 members and a 50,103-byte
+  archive, reproducible across two builds; archive SHA-256 is
+  `7a148e8428f863cc1996ab31f212e16c92e8b49148857a853230fc647ea7d4df`.
+- Focused server, client, browser, typecheck, lint, and generated API checks passed on the port
+  commits.
+
+## Final qualification record — commit `f05b673`
+
+- Local `bun run check` passed with 131 active tests and 21 PostgreSQL-gated skips; build,
+  typecheck, lint, and generated API checks passed.
+- The committed Python package suite passed 11/11 tests.
+- `bun run test:agentation` passed 22/22 Chromium UI tests, including the v2 lifecycle-state test.
+- An isolated deployment-host rehearsal used disposable PostgreSQL 17 and the pinned production
+  Dockerfile build, applied migrations twice, and passed all 21 PostgreSQL integration tests.
+- The prior image
+  `sha256:a34b7cbbd526e9928c448f935df48da2c5c58bbbfb7e0430f7cd413b9727f13a` served healthy HTML
+  against the expanded schema. A streaming age-encrypted backup, isolated restore, repeated
+  migrations, and new-image health/HTML checks passed.
+- The encrypted rehearsal artifact SHA-256 was
+  `66467d1927bd53d17505b9f68d8881bbe7b4fca3a90cbb006ab9ce3c0b2e09fa` before automatic cleanup.
+  Production was untouched. Package/server adversarial blockers were fixed, obsolete local
+  rollback was removed, and initial harness runtime/container failures were resolved without
+  product-level failure claims.
+
+Qualification blockers and non-claims:
+
+- Native-Mac branches not explicitly exercised remain unqualified: a physical macOS install or
+  wake test and the production canary remain post-deploy/manual gates. They do not block code being
+  ready to deploy, but they do block declaring the production rollout proven. The disabled and
+  archived `com.homing.backup` LaunchAgent is not treated as a running or protected schedule.

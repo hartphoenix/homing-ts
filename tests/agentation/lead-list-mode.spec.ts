@@ -155,6 +155,9 @@ test("list mode is compact, sortable, searchable, and supports batch actions", a
   });
 
   await page.goto(`/projects/${projectId}`);
+  await expect(
+    page.locator(".lead-card").first().locator(".lead-card-engagement > span:not(.sr-only)"),
+  ).toHaveText(["2 ♥", "|", "4 comments"]);
   await page.getByRole("button", { name: "List" }).click();
 
   const table = page.getByRole("table");
@@ -199,6 +202,19 @@ test("list mode is compact, sortable, searchable, and supports batch actions", a
   await expect(page.getByRole("row").nth(1)).toContainText("Parkside one-bedroom");
 
   await page.getByRole("checkbox", { name: "Select Parkside one-bedroom" }).check();
+  await page.setViewportSize({ width: 375, height: 800 });
+  const batchLayout = await page
+    .getByRole("toolbar", { name: "Batch actions" })
+    .evaluate((bar) => ({
+      pageWidth: bar.closest("main")?.scrollWidth,
+      pageClientWidth: bar.closest("main")?.clientWidth,
+      actionsVisible: Array.from(bar.querySelectorAll("button")).every((button) => {
+        const box = button.getBoundingClientRect();
+        return box.left >= 0 && box.right <= document.documentElement.clientWidth;
+      }),
+    }));
+  expect(batchLayout.pageWidth).toBe(batchLayout.pageClientWidth);
+  expect(batchLayout.actionsVisible).toBe(true);
   await page.getByRole("button", { name: "Interested", exact: true }).click();
   await expect
     .poll(() => batchBody)

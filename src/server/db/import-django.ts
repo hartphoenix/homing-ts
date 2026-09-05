@@ -111,7 +111,6 @@ async function importState(
           timezone: user.timezone,
           bio: user.bio,
           personal_details: transaction.typed(user.personal_details, 3802),
-          agent_paused_until: user.agent_paused_until,
           updated_at: user.profile_updated_at,
         })),
       )}

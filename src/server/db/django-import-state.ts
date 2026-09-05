@@ -49,7 +49,6 @@ export type ImportUser = {
   timezone: string;
   bio: string;
   personal_details: JsonText;
-  agent_paused_until: DatabaseTimestamp | null;
   profile_updated_at: DatabaseTimestamp;
 };
 
@@ -623,7 +622,7 @@ async function queryState(
                false as password_reset_required,
                u.last_login, u.is_staff,
                u.is_superuser, u.is_active, u.date_joined, u.updated_at, p.display_name,
-               p.timezone, p.bio, p.personal_details, p.agent_paused_until,
+               p.timezone, p.bio, p.personal_details,
                p.updated_at as profile_updated_at
           from accounts_user u
           join accounts_profile p on p.user_id = u.id
@@ -634,7 +633,7 @@ async function queryState(
                u.legacy_is_staff as is_staff,
                u.legacy_is_superuser as is_superuser, u.is_active, u.created_at as date_joined,
                u.updated_at, p.display_name, p.timezone, p.bio, p.personal_details,
-               p.agent_paused_until, p.updated_at as profile_updated_at
+               p.updated_at as profile_updated_at
           from users u join profiles p on p.user_id = u.id
          order by u.id
       `;

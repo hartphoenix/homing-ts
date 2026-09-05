@@ -1,53 +1,43 @@
 # Backup and restore
 
-Production backups are PostgreSQL custom dumps encrypted in flight with `age`. Plaintext dumps are
-never written to disk. Off-host upload is optional and happens only after encryption.
+Production backups are PostgreSQL custom dumps encrypted with `age`. Plaintext dumps are never
+written to disk; off-host upload occurs only after encryption succeeds. Backups belong to the
+TypeScript Compose project and are independent of the agent kit's local SQLite work ledger.
 
-Required `.env` settings:
+Required environment settings:
 
-- `DATABASE_ADMIN_URL`: the database owner URL used only by the one-shot role provisioner; it binds
-  the initial `POSTGRES_USER`/`POSTGRES_PASSWORD` to host `db`. Backup and restore authenticate over
-  container-local TCP with that initial role and password.
-- `DATABASE_MIGRATION_URL`: the URL used only by Drizzle migrations.
-- `DATABASE_URL`: the restricted runtime URL used by web; it must not use the admin or migration
-  role.
-- `BACKUP_AGE_RECIPIENT`: the public age recipient used for encryption.
-- `BACKUP_RETENTION_DAYS`: local retention, default 35 days.
-- `BACKUP_RCLONE_REMOTE`: optional remote path; rclone credentials stay in the host config.
+- `DATABASE_ADMIN_URL`: initial database-owner URL used only by provisioning and backup/restore;
+- `DATABASE_MIGRATION_URL`: URL used only by Drizzle migrations;
+- `DATABASE_URL`: restricted runtime URL used by web;
+- `BACKUP_AGE_RECIPIENT`: public age recipient;
+- `BACKUP_RETENTION_DAYS`: local retention period;
+- `BACKUP_RCLONE_REMOTE`: optional remote destination; credentials stay in host configuration.
 
-`AGE_IDENTITY_FILE` is needed only for the explicitly human-run isolated restore rehearsal. It
-points to a host file, is never passed into a container, and must be a regular mode-0600 file owned
-by the invoking user. Do not copy the recovery identity onto the application host for routine
-backups. Do not render Compose configuration without redacting interpolated values.
+`AGE_IDENTITY_FILE` is only for a human-run isolated restore rehearsal. It must be a regular,
+mode-0600 file owned by the invoking user, is never passed into a container, and is never rendered
+or printed. Redact all interpolated configuration output.
 
-Create and verify a backup:
+## Create and verify
 
 ```sh
 ./docker/backup.sh
 ```
 
-Both scripts default to `.env`. For an isolated rehearsal, set `HOMING_ENV_FILE` to its persistent
-mode-0600 environment file. The scripts read `COMPOSE_PROJECT_NAME` from that file, so scheduled or
-later commands retain the same project, volumes, networks, image digests, ports, and credentials.
-For a legacy checkout whose environment predates that field, set the explicit
-`HOMING_COMPOSE_PROJECT_NAME` wrapper variable.
-Backup artifacts default to `backups/<COMPOSE_PROJECT_NAME>/`, retention applies only within that
-namespace, and off-host uploads append the same project namespace. Production and rehearsal
-therefore cannot overwrite or prune each other's artifacts.
+The command reads the persistent environment file, selects its Compose project namespace, streams
+`pg_dump` through `age`, waits for both producer processes, verifies a non-empty age envelope, and
+publishes atomically without overwriting an existing artifact. Temporary files contain FIFOs and an
+encrypted partial only. Retention and optional upload are scoped to the same project namespace, so
+rehearsal and production artifacts cannot prune or overwrite one another.
 
-The command streams `pg_dump` through `age`, waits for both producer processes, checks that the
-result is a non-empty age v1 envelope, and publishes it only after encryption succeeds. The
-temporary directory contains FIFOs and an encrypted partial file, never a plaintext dump. Local
-publication is atomic and refuses to overwrite an existing artifact; off-host upload occurs only
-afterward.
+The routine command proves an encrypted dump was produced. Decryption, archive inventory, and
+restorability require the isolated restore rehearsal below.
 
-This proves that PostgreSQL completed a custom-format dump and that `age` produced an encrypted
-artifact. Without the offline recovery identity it cannot prove decryption, archive inventory, or
-restorability; those are proven by the isolated restore rehearsal below.
+## Restore rehearsal and recovery
 
-Restore verifies the archive before stopping public traffic, replaces the database with web and
-Caddy stopped, and runs schema migrations only after the restore succeeds. It does not restart
-public services automatically:
+Restore uses an empty isolated target, verifies the encrypted archive before stopping public
+traffic, decrypts through a draining FIFO, waits for `age` and `pg_restore`, and runs migrations
+only after restore succeeds. A reset, decrypt, or restore failure leaves web and Caddy stopped.
+After success, web and Caddy remain stopped until private semantic checks and smoke pass.
 
 ```sh
 HOMING_ENV_FILE=/opt/homing-ts/.env.rehearsal \
@@ -55,28 +45,13 @@ RESTORE_CONFIRM=YES AGE_IDENTITY_FILE=/path/to/offline/identity \
 ./docker/restore.sh /absolute/path/to/backup.dump.age
 ```
 
-Restore verifies the encrypted archive inventory before stopping public traffic. It then stops web
-and Caddy, drops and recreates the target database, decrypts through a draining FIFO, and waits for
-both `age` and `pg_restore`. A reset, decrypt, or restore failure leaves web and Caddy stopped.
-PostgreSQL restore runs as one transaction. Provisioning, migrations, and runtime-role hardening
-happen only after restore success. Even after success, both web and Caddy remain stopped; run private semantic checks and
-`./docker/smoke.sh http://localhost:8081` explicitly before starting public Caddy.
+Rehearse the exact restore before each production release. Record pre-migration counts and
+checksums, prove the expanded schema preserves existing data, run old-image and v2-image smoke,
+create a fresh encrypted backup, restore it into isolation, and verify v2 constraints and
+canonical package bytes. Database restore is reserved for corruption or this explicit recovery
+exercise; ordinary release failure rolls back the prior TypeScript image.
 
-Rehearse restore into an isolated database before cutover. Retain the Django encrypted backup,
-database volume, checkout, and image for at least seven days. Rolling traffic back to Django after
-the TypeScript app accepts writes loses those new writes; that is a human cutover decision.
-
-Immediately after importing the frozen Django snapshot, validate the redacted migration boundary
-through the guarded importer. On an already imported target, import is a checksum-verified replay
-and then the independent validator runs:
-
-```sh
-export MIGRATION_CUTOVER_AT=<recorded-UTC-freeze-timestamp>
-HOMING_ENV_FILE=/opt/homing-ts/.env.rehearsal DJANGO_PROJECT_DIR=/opt/homing-rehearsal \
-  /opt/homing-ts/docker/import-frozen-django.sh
-unset MIGRATION_CUTOVER_AT
-```
-
-Keep the Django source frozen and privately reachable until both import and independent validation
-finish. The script creates and removes a temporary read-only credential and network attachment;
-neither command prints row contents or credentials.
+The former `com.homing.backup` LaunchAgent was deliberately disabled and archived. It is not an
+active protected schedule and must not be described as running or recreated by local v2 removal or
+server rollback. Use `./docker/backup.sh` for an explicitly authorized manual backup. Never delete
+shared application-support or log paths merely because they share a parent directory.

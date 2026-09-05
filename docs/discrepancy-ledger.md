@@ -1,31 +1,26 @@
-# Behavioral discrepancy ledger
+# v2 behavioral discrepancy ledger
 
-Precedence:
+Every conflict receives `keep`, `change`, or `defer` before the affected implementation begins.
+The reviewed v2 agent-kit and search contract is authoritative, followed by the build specification
+and acceptance matrix, existing TypeScript product behavior outside this contract, the Django v2
+implementation as evidence, and v1 behavior as rollback evidence only.
 
-1. Security and wire requirements consumed by the unchanged agent kit.
-2. Behavior explicitly included in the reviewed replacement plan.
-3. Observed behavior of the current Django server.
-4. Existing documentation and tests as non-normative evidence.
-
-Every discovered conflict must receive an explicit `keep`, `change`, or `defer` resolution before
-the affected implementation begins.
-
-| Area | Evidence | Conflict | Resolution | Reason |
-|---|---|---|---|---|
-| Source-plan repair prompt | Django generates it in the browser layer | No JSON endpoint | change | Add bounded, private `/api/v1/me/source-plan-repair` endpoint. |
-| Change cursor | Existing client persists numeric cursor | New project history starts empty | change | Introduce `<feed_epoch>:<sequence>` and return 410 for legacy cursors. |
-| Browser authentication | Django uses HTML login/session | React requires JSON session bootstrap | change | Add CSRF and session endpoints while retaining agent bearer behavior. |
-| Legacy test corpus | Large implementation-coupled suite | Porting would preserve cruft | defer | Replace with compact policy and journey matrix. |
-| Kit manifest | Bootstrap documents fields Django omits | Fetch ladders cannot validate as documented | change | Add fields additively without changing package bytes. |
-| Continuation | Client emits `next`; Django rejects it | Scheduled completion can fail | change | Accept the client's closed enum. |
-| Bulk idempotency | OpenAPI/client promise it; Django ignores it | Retries can duplicate writes | change | Implement durable replay for intended mutation endpoints. |
-| Project roles | Older docs call viewers read-only | Current product grants equal content authority | keep | Preserve equal collaborator content rights; owner remains administrative. |
-| Complete application migration | A partial import would strand accounts or discard authored and project state | Cutover must preserve all user access and project data | change | Import every user/profile, password hash, saved prompt, project, membership, invitation, prompt revision, run history, lead, interest, comment, review, and audit row under an exact source/target checksum. |
-| Migration authority state | Django sessions, tokens, links, throttles, claims, invitation digests, idempotency rows, and feed cursors are deployment-specific authority or replay state | Copying them would preserve credentials across a changed security boundary | change | Rotate them: require fresh browser login and agent pairing, revoke pending invitations for reissue, cancel active run claims, and start a new project-feed epoch. Preserve the associated historical content and identifiers where safe. |
-| Legacy staff flags | Django carries staff/superuser authorization that the replacement does not implement | Reusing the flags could create accidental authority | change | Archive the booleans as explicitly nonauthorizing `legacy_is_staff`/`legacy_is_superuser` metadata. |
-| Lead fallback identity | Django and TypeScript normalize query parameters differently before hashing a listing URL | Preserving the Django-derived hash would make imported rows disagree with future TypeScript deduplication | change | Recompute `identity_hash` with the TypeScript normalizer during import, reject any resulting project-local collision, and preserve the canonical/source URLs and every authored lead field. |
-| Pending invitation management | Django's JSON API creates invitations but neither lists nor revokes them | The React member journey needs durable pending rows and owner cancellation | change | Include active `pending_invitations` in the member response and accept owner-only `DELETE /projects/:id/invitations` with `invitation_id`, setting `revoked_at` so the link becomes unusable. |
-| Agent connection timestamps | The current TS token-list serializer omits `created_at` and `last_used_at` even though both are stored | The React connection table must show activation and recent use | change | Add both timestamps to each `/api/v1/auth/tokens` item; retain nullable `last_used_at` for keys that have never been used. |
-| Lead pagination | Django returns bounded unpaginated results | Existing UI performs poorly at growth | change | Implement bounded cursor pagination from the start. |
-| Dependency audit | drizzle-kit retains a legacy esbuild loader | `bun audit` reports one moderate development-server advisory | keep | Production esbuild is patched; drizzle-kit never runs in production. Recheck on toolchain upgrade. |
-| Kit traversal | Fetch/Hono normalize dot segments before routing | A traversal alias can resolve to another public allowlisted kit file | keep | No request-derived filesystem join exists and traversal cannot escape the public allowlist; the security boundary is file reachability, not rejection of equivalent public paths. |
+| Area | Existing assumption or evidence | v2 decision | Rationale |
+|---|---|---|---|
+| Contract precedence | The repository treated the unchanged v1 package as highest precedence | change | The reviewed v2 contract now governs the port; v1 is rollback evidence only. |
+| Server ownership | Django was the replacement source and rollback target | change | TypeScript is already production and remains the canonical server, package publisher, and deployment target. No Django importer or deployment rollback is part of this port. |
+| Local v1 state | A failed v1 installation could be treated as a rollback install | change | It is cleanup residue. Remove its job, runtime/config/state, skill copies, logs, installer backups, and credential metadata. The former `com.homing.backup` LaunchAgent is disabled and archived, not an active protected job. |
+| Local configuration | A second local prompt/source replica could support runtime | change | Homing is the sole source of current prompt, requirements, acquisition basis, and source configuration. SQLite stores only recoverable work and delivery state. |
+| Setup artifact | A top-level setup `SKILL.md` could be installed or persisted | change | Use top-level `SETUP.md` with no skill frontmatter. Only the optional installed `homing-check/SKILL.md` is durable; legacy setup URLs redirect without adding an archive member. |
+| Configuration model | Prompt prose and legacy rows could supply runtime requirements | change | Add complete immutable v2 revisions, explicit evidence and acquisition fields, immutable query revisions, exact canonical bytes, and hashes. Legacy revisions remain immutable and are never inferred from. |
+| Schema migration | A Django data importer and empty target were required | change | Extend the existing PostgreSQL schema in place with an expand-only Drizzle migration. No Django data migration or second product database. |
+| Run storage | v2 could overload leased v1 `search_runs` | change | Use a distinct v2 run table with invocation idempotency and truthful terminal reports; do not depend on v1 leases, claims, cursors, or continuation state. |
+| Source changes | Acquisition edits could run against old queries | change | Revision query inputs by acquisition-basis hash; mark replacements `needs_review` and require attended refresh before acquisition. |
+| Connection authority | A durable broad token or permanent setup write scope was acceptable | change | Pair as protocol v2, issue exactly the documented scopes, expire initial source-write authority after 30 minutes, consume it on finalization, and allow only browser-approved 15-minute refresh. |
+| Pause semantics | Pause could be per connection or local-only | change | Keep a user-wide, reversible 14-day `paused_until`, visible in discovery and introspection and enforced before acquisition. |
+| Delivery mutation | Generic lead upsert could update existing fields | change | Use a dedicated create-or-return-existing transaction keyed by stable identity; never overwrite human edits and record the match observation idempotently. |
+| Setup cleanup | Temporary package residue could be left or broadly deleted | change | Finalize only a verified manifest-listed workspace, refuse ambiguous paths, report residue, and make a second cleanup a no-op. |
+| Package source and digest | A Django archive or release digest could remain authoritative | change | TypeScript owns the package. Rebuild and requalify final production-origin bytes; preserve deterministic manifest/archive behavior. |
+| Native gate | A discarded VM or disposable-user run was required | change | Use the isolated deployment-host rehearsal for database and container qualification. Record only paths actually exercised; this qualification claims no physical native-macOS install or wake test or production canary. Those remain post-deploy/manual proof gates and do not block code readiness. |
+| Rollback | A local v1 search bundle or Django server restored all prior behavior | change | The obsolete local v1 rollback path is removed. Ordinary failure pauses/removes v2 locally and selects the prior TypeScript image; database restore is reserved for corruption. |
+| Feedback and repair | Prompt self-modification, source-plan repair, or automatic repair could enter v2 | defer | Future feedback proposals remain an explicit user-approved extension. v2 exposes configuration state and attended source refresh only. |

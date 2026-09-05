@@ -77,6 +77,19 @@
     "auth": "either"
   },
   {
+    "method": "delete",
+    "path": "/api/v1/me/token",
+    "classification": "agent-required",
+    "auth": "either",
+    "status": 204
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/me/token/finalize-setup",
+    "classification": "agent-required",
+    "auth": "either"
+  },
+  {
     "method": "get",
     "path": "/api/v1/auth/tokens",
     "classification": "browser-required",
@@ -111,6 +124,67 @@
     "classification": "agent-required",
     "auth": "public",
     "body": true
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/agent/projects",
+    "classification": "agent-required",
+    "auth": "either"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/projects/{project}/config-revisions",
+    "classification": "agent-required",
+    "auth": "either",
+    "body": true,
+    "status": 201
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/projects/{project}/config-revisions/{revision}",
+    "classification": "agent-required",
+    "auth": "either"
+  },
+  {
+    "method": "get",
+    "path": "/api/v1/projects/{project}/source-query-revisions/{query}",
+    "classification": "agent-required",
+    "auth": "either"
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/agent-runs",
+    "classification": "agent-required",
+    "auth": "either",
+    "body": true,
+    "status": 201
+  },
+  {
+    "method": "patch",
+    "path": "/api/v1/agent-runs/{run}",
+    "classification": "agent-required",
+    "auth": "either",
+    "body": true
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/projects/{project}/leads/create-or-return-existing",
+    "classification": "agent-required",
+    "auth": "either",
+    "body": true
+  },
+  {
+    "method": "put",
+    "path": "/api/v1/me/agent-pause",
+    "classification": "browser-required",
+    "auth": "session",
+    "body": true
+  },
+  {
+    "method": "post",
+    "path": "/api/v1/auth/tokens/{connection}/source-refresh",
+    "classification": "browser-required",
+    "auth": "session"
   },
   {
     "method": "get",
@@ -499,13 +573,13 @@
   },
   {
     "method": "get",
-    "path": "/agent/pkg/SKILL.md",
+    "path": "/agent/pkg/SETUP.md",
     "classification": "public",
     "auth": "public"
   },
   {
     "method": "head",
-    "path": "/agent/pkg/SKILL.md",
+    "path": "/agent/pkg/SETUP.md",
     "classification": "public",
     "auth": "public"
   },
@@ -535,25 +609,25 @@
   },
   {
     "method": "get",
-    "path": "/agent/pkg/references/{name}",
+    "path": "/agent/pkg/adapters/{name}",
     "classification": "public",
     "auth": "public"
   },
   {
     "method": "head",
-    "path": "/agent/pkg/references/{name}",
+    "path": "/agent/pkg/adapters/{name}",
     "classification": "public",
     "auth": "public"
   },
   {
     "method": "get",
-    "path": "/agent/pkg/scripts/{name}",
+    "path": "/agent/pkg/homing-check/SKILL.md",
     "classification": "public",
     "auth": "public"
   },
   {
     "method": "head",
-    "path": "/agent/pkg/scripts/{name}",
+    "path": "/agent/pkg/homing-check/SKILL.md",
     "classification": "public",
     "auth": "public"
   }

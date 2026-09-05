@@ -15,7 +15,6 @@ test("places price and conversation in the lead content column", async ({ page }
           timezone: "America/New_York",
           bio: "",
           details: {},
-          agent_paused_until: null,
         },
       }),
     });
@@ -110,6 +109,12 @@ test("places price and conversation in the lead content column", async ({ page }
   expect(conversation.x).toBeCloseTo(main.x, 0);
   expect(conversation.width).toBeCloseTo(main.width, 0);
   expect(conversation.y).toBeGreaterThan(article.y + article.height);
+
+  const titleFontSize = await page
+    .getByRole("heading", { level: 1 })
+    .evaluate((title) => getComputedStyle(title).fontSize);
+  await page.getByRole("button", { name: "Edit lead" }).click();
+  await expect(page.getByLabel("Title")).toHaveCSS("font-size", titleFontSize);
 });
 
 test("trash detail keeps forbidden actions hidden and restore refreshes the revision", async ({

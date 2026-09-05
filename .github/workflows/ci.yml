@@ -57,7 +57,7 @@ jobs:
       - name: Production client build
         run: bun run build
       - name: Vendored Python syntax
-        run: python3 -m py_compile agentkit/package/scripts/*.py
+        run: python3 -m compileall -q agentkit/package
 
   container:
     runs-on: ubuntu-24.04

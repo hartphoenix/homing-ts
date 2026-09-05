@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import { and, asc, count, desc, eq, gt, ilike, isNull, lt, or, sql } from "drizzle-orm";
-
+import { canonicalJsonBytes, canonicalJsonSha256 } from "../agent/v2/canonical";
 import { getDatabase } from "../db/client";
 import {
   auditEvents,
@@ -14,7 +14,9 @@ import {
   projectInvitations,
   projectMemberships,
   projects,
+  promptRevisionSourceQueries,
   promptRevisions,
+  sourceQueryRevisions,
   users,
 } from "../db/schema";
 import { HomingError } from "../http";
@@ -228,15 +230,6 @@ export class PostgresCollaborationRepository implements CollaborationRepository 
       .where(and(eq(projectMemberships.userId, userId), eq(projects.status, "active")))
       .orderBy(desc(projects.updatedAt), desc(projects.id));
     return rows.map(({ project }) => projectRecord(project));
-  }
-
-  async getAgentPausedUntil(userId: number): Promise<Date | null> {
-    const [row] = await this.db
-      .select({ value: profiles.agentPausedUntil })
-      .from(profiles)
-      .where(eq(profiles.userId, userId))
-      .limit(1);
-    return row?.value ?? null;
   }
 
   async getProject(projectId: string): Promise<ProjectRecord | null> {
@@ -482,17 +475,26 @@ export class PostgresCollaborationRepository implements CollaborationRepository 
     prompt: string,
     criteria: Record<string, unknown>,
     editorId: number,
+    acquisitionBasis?: Record<string, unknown>,
   ): Promise<{ project: ProjectRecord; revision: PromptRevisionRecord }> {
+    if (!this.inTransaction) {
+      return this.db.transaction((transaction) =>
+        new PostgresCollaborationRepository(transaction as unknown as Database, true).updatePrompt(
+          projectId,
+          expectedRevision,
+          prompt,
+          criteria,
+          editorId,
+          acquisitionBasis,
+        ),
+      );
+    }
     const [projectRow] = await this.db
-      .update(projects)
-      .set({
-        currentPrompt: prompt,
-        criteria,
-        promptRevision: sql`${projects.promptRevision} + 1`,
-        updatedAt: new Date(),
-      })
-      .where(and(eq(projects.id, projectId), eq(projects.promptRevision, expectedRevision)))
-      .returning();
+      .select()
+      .from(projects)
+      .where(eq(projects.id, projectId))
+      .limit(1)
+      .for("update");
     if (!projectRow) {
       const current = await this.getProject(projectId);
       if (!current) throw new HomingError("not_found", "Object not found.", 404);
@@ -500,13 +502,270 @@ export class PostgresCollaborationRepository implements CollaborationRepository 
         current_revision: current.promptRevision,
       });
     }
+    if (projectRow.promptRevision !== expectedRevision) {
+      throw new HomingError("stale_write", "The prompt changed since it was read.", 409, {
+        current_revision: projectRow.promptRevision,
+      });
+    }
+
+    const [currentConfig] = projectRow.currentConfigRevisionId
+      ? await this.db
+          .select()
+          .from(promptRevisions)
+          .where(
+            and(
+              eq(promptRevisions.id, projectRow.currentConfigRevisionId),
+              eq(promptRevisions.projectId, projectId),
+            ),
+          )
+          .limit(1)
+      : [];
+    const currentQueries = currentConfig
+      ? await this.db
+          .select({
+            position: promptRevisionSourceQueries.position,
+            query: sourceQueryRevisions,
+          })
+          .from(promptRevisionSourceQueries)
+          .innerJoin(
+            sourceQueryRevisions,
+            eq(sourceQueryRevisions.id, promptRevisionSourceQueries.sourceQueryRevisionId),
+          )
+          .where(
+            and(
+              eq(promptRevisionSourceQueries.promptRevisionId, currentConfig.id),
+              eq(promptRevisionSourceQueries.projectId, projectId),
+              eq(sourceQueryRevisions.projectId, projectId),
+            ),
+          )
+          .orderBy(asc(promptRevisionSourceQueries.position))
+      : [];
+
+    const revisionNumber = projectRow.promptRevision + 1;
+    let configStatus: "legacy" | "needs_review" | "complete" = "legacy";
+    let requiredEvidence: string[] = [];
+    let nextAcquisitionBasis: Record<string, unknown> | null = null;
+    let canonicalBytes: Uint8Array | null = null;
+    let canonicalSha256: string | null = null;
+    let queryRefs: Array<{ id: string; revision: number; sha256: string; position: number }> = [];
+
+    if (currentConfig?.configStatus !== undefined && currentConfig.configStatus !== "legacy") {
+      requiredEvidence = currentConfig.requiredEvidence;
+      const criteriaChanged =
+        canonicalJsonSha256(criteria) !== canonicalJsonSha256(currentConfig.criteria);
+      let priorConfirmedBasis: Record<string, unknown> | undefined;
+      if (criteriaChanged && acquisitionBasis === undefined) {
+        const criteriaHash = canonicalJsonSha256(criteria);
+        const historicalSources = await this.db
+          .select({
+            criteria: promptRevisions.criteria,
+            acquisitionBasis: promptRevisions.acquisitionBasis,
+            adapter: sourceQueryRevisions.adapter,
+            queryIdentity: sourceQueryRevisions.queryIdentity,
+            status: sourceQueryRevisions.status,
+            promptRevision: promptRevisions.revision,
+            sourceRevision: sourceQueryRevisions.revision,
+            sourceId: sourceQueryRevisions.id,
+          })
+          .from(promptRevisions)
+          .innerJoin(
+            promptRevisionSourceQueries,
+            and(
+              eq(promptRevisionSourceQueries.promptRevisionId, promptRevisions.id),
+              eq(promptRevisionSourceQueries.projectId, projectId),
+            ),
+          )
+          .innerJoin(
+            sourceQueryRevisions,
+            and(
+              eq(sourceQueryRevisions.id, promptRevisionSourceQueries.sourceQueryRevisionId),
+              eq(sourceQueryRevisions.projectId, projectId),
+            ),
+          )
+          .where(
+            and(
+              eq(promptRevisions.projectId, projectId),
+              eq(promptRevisions.configStatus, "complete"),
+            ),
+          )
+          .orderBy(
+            desc(sql`case when ${sourceQueryRevisions.status} = 'ready' then 1 else 0 end`),
+            desc(promptRevisions.revision),
+            desc(sourceQueryRevisions.revision),
+            asc(sourceQueryRevisions.id),
+          );
+        const prior = historicalSources.find(
+          (candidate) =>
+            canonicalJsonSha256(candidate.criteria) === criteriaHash &&
+            currentQueries.some(
+              (source) =>
+                source.query.adapter === candidate.adapter &&
+                source.query.queryIdentity === candidate.queryIdentity,
+            ) &&
+            candidate.acquisitionBasis !== null,
+        );
+        priorConfirmedBasis = prior?.acquisitionBasis ?? undefined;
+      }
+      // The current collaboration contract carries acquisition fields in criteria. When a
+      // caller does not provide the newer explicit basis field, the changed criteria is the
+      // new basis; retaining the old hash would make an immutable replacement indistinguishable
+      // from the confirmed query and violate the query identity/basis uniqueness invariant.
+      nextAcquisitionBasis =
+        acquisitionBasis ??
+        (criteriaChanged
+          ? (priorConfirmedBasis ?? criteria)
+          : (currentConfig.acquisitionBasis ?? {}));
+      const acquisitionChanged =
+        acquisitionBasis === undefined
+          ? criteriaChanged
+          : canonicalJsonSha256(acquisitionBasis) !==
+            canonicalJsonSha256(currentConfig.acquisitionBasis ?? {});
+      configStatus =
+        currentConfig.configStatus === "complete" && !acquisitionChanged
+          ? "complete"
+          : "needs_review";
+
+      if (acquisitionChanged) {
+        const nextBasisHash = canonicalJsonSha256(nextAcquisitionBasis);
+        for (const source of currentQueries) {
+          const [existing] = await this.db
+            .select({
+              id: sourceQueryRevisions.id,
+              revision: sourceQueryRevisions.revision,
+              canonicalSha256: sourceQueryRevisions.canonicalSha256,
+              status: sourceQueryRevisions.status,
+            })
+            .from(sourceQueryRevisions)
+            .where(
+              and(
+                eq(sourceQueryRevisions.projectId, projectId),
+                eq(sourceQueryRevisions.adapter, source.query.adapter),
+                eq(sourceQueryRevisions.queryIdentity, source.query.queryIdentity),
+                eq(sourceQueryRevisions.acquisitionBasisHash, nextBasisHash),
+              ),
+            )
+            .limit(1)
+            .for("update");
+          const payload = {
+            version: 1,
+            adapter: source.query.adapter,
+            query: source.query.normalizedQuery,
+            acquisition_basis_hash: nextBasisHash,
+          };
+          const canonicalSha256 = canonicalJsonSha256(payload);
+          if (existing && existing.canonicalSha256 !== canonicalSha256) {
+            throw new HomingError(
+              "conflict",
+              "The matching source query revision has different canonical bytes.",
+              409,
+            );
+          }
+          let replacement = existing;
+          if (!replacement) {
+            const [latest] = await this.db
+              .select({
+                revision: sql<number>`coalesce(max(${sourceQueryRevisions.revision}), 0)`,
+              })
+              .from(sourceQueryRevisions)
+              .where(
+                and(
+                  eq(sourceQueryRevisions.projectId, projectId),
+                  eq(sourceQueryRevisions.adapter, source.query.adapter),
+                ),
+              );
+            const bytes = canonicalJsonBytes(payload);
+            const [created] = await this.db
+              .insert(sourceQueryRevisions)
+              .values({
+                id: randomUUID(),
+                projectId,
+                adapter: source.query.adapter,
+                revision: Number(latest?.revision ?? 0) + 1,
+                normalizedQuery: source.query.normalizedQuery,
+                queryIdentity: source.query.queryIdentity,
+                acquisitionBasisHash: nextBasisHash,
+                canonicalBytes: bytes,
+                canonicalSha256,
+                status: "needs_review",
+              })
+              .returning({
+                id: sourceQueryRevisions.id,
+                revision: sourceQueryRevisions.revision,
+                canonicalSha256: sourceQueryRevisions.canonicalSha256,
+                status: sourceQueryRevisions.status,
+              });
+            replacement = created;
+          }
+          if (!replacement) throw new Error("source query replacement returned no row");
+          queryRefs.push({
+            id: replacement.id,
+            revision: replacement.revision,
+            sha256: replacement.canonicalSha256,
+            position: source.position,
+          });
+        }
+      } else {
+        queryRefs = currentQueries.map(({ position, query }) => ({
+          id: query.id,
+          revision: query.revision,
+          sha256: query.canonicalSha256,
+          position,
+        }));
+      }
+
+      const payload = {
+        version: 1,
+        prompt,
+        criteria,
+        required_evidence: requiredEvidence,
+        acquisition_basis: nextAcquisitionBasis,
+        source_queries: queryRefs,
+      };
+      canonicalBytes = canonicalJsonBytes(payload);
+      canonicalSha256 = canonicalJsonSha256(payload);
+    }
+
     const [revision] = await this.db
       .insert(promptRevisions)
-      .values({ projectId, revision: projectRow.promptRevision, prompt, criteria, editorId })
+      .values({
+        projectId,
+        revision: revisionNumber,
+        prompt,
+        criteria,
+        configStatus,
+        requiredEvidence,
+        acquisitionBasis: nextAcquisitionBasis,
+        canonicalBytes,
+        canonicalSha256,
+        editorId,
+      })
       .returning();
     if (!revision)
       throw new HomingError("server_error", "The prompt revision could not be saved.", 500);
-    return { project: projectRecord(projectRow), revision: promptRecord(revision) };
+    if (configStatus !== "legacy") {
+      await this.db.insert(promptRevisionSourceQueries).values(
+        queryRefs.map((query) => ({
+          projectId,
+          promptRevisionId: revision.id,
+          sourceQueryRevisionId: query.id,
+          position: query.position,
+        })),
+      );
+    }
+    const [updatedProject] = await this.db
+      .update(projects)
+      .set({
+        currentPrompt: prompt,
+        criteria,
+        promptRevision: revisionNumber,
+        ...(configStatus === "legacy" ? {} : { currentConfigRevisionId: revision.id }),
+        updatedAt: new Date(),
+      })
+      .where(eq(projects.id, projectId))
+      .returning();
+    if (!updatedProject)
+      throw new HomingError("server_error", "The project could not be updated.", 500);
+    return { project: projectRecord(updatedProject), revision: promptRecord(revision) };
   }
 
   async listLeads(

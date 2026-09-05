@@ -1,4 +1,5 @@
 import { createPostgresAgentServices } from "./agent/postgres-repository";
+import { createPostgresV2Repository } from "./agent/v2/postgres-repository";
 import { createApp } from "./app";
 import { DrizzleAuthRepository } from "./auth/drizzle-repository";
 import { PostgresCollaborationRepository } from "./collaboration/postgres-repository";
@@ -51,6 +52,7 @@ const app = createApp({
     tokenDays: config.AGENT_TOKEN_DAYS,
     throttleKey: config.AUTH_THROTTLE_KEY,
   },
+  v2: { repository: createPostgresV2Repository() },
   agent: {
     runs: { service: agentServices.runs },
     changes: { service: agentServices.changes },

@@ -195,7 +195,6 @@ export interface CollaborationRepository {
   transaction<T>(callback: (repository: CollaborationRepository) => Promise<T>): Promise<T>;
 
   listProjects(userId: number): Promise<ProjectRecord[]>;
-  getAgentPausedUntil(userId: number): Promise<Date | null>;
   getProject(projectId: string): Promise<ProjectRecord | null>;
   createProject(input: Omit<ProjectRecord, "createdAt" | "updatedAt">): Promise<ProjectRecord>;
   updateProject(
@@ -230,6 +229,7 @@ export interface CollaborationRepository {
     prompt: string,
     criteria: Record<string, unknown>,
     editorId: number,
+    acquisitionBasis?: Record<string, unknown>,
   ): Promise<{ project: ProjectRecord; revision: PromptRevisionRecord }>;
 
   listLeads(

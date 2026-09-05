@@ -14,7 +14,6 @@ test("moves navigation and the inverse view action into a mobile menu", async ({
           timezone: "America/New_York",
           bio: "",
           details: {},
-          agent_paused_until: null,
         },
       }),
     });
@@ -48,6 +47,9 @@ test("moves navigation and the inverse view action into a mobile menu", async ({
   const menuTrigger = page.getByRole("button", { name: "Open navigation menu" });
   await expect(menuTrigger).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
   await expect(menuTrigger).toHaveCSS("border-top-width", "0px");
+  const triggerBox = await menuTrigger.boundingBox();
+  expect(triggerBox?.width).toBeGreaterThanOrEqual(44);
+  expect(triggerBox?.height).toBeGreaterThanOrEqual(44);
   await menuTrigger.click();
   const menu = page.getByRole("navigation", { name: "Mobile navigation" });
   const searchesLink = menu.getByRole("link", { name: "Searches" });

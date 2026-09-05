@@ -1,0 +1,1 @@
+ALTER TABLE "profiles" DROP COLUMN "agent_paused_until";

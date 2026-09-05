@@ -14,6 +14,23 @@ export const KIT_MAX_ARCHIVE_BYTES = 256 * 1024;
 export const KIT_CACHE_SECONDS = 300;
 export const KIT_VERSION_CACHE_SECONDS = 3600;
 
+const KIT_ROOT_FILES = new Set([
+  "SETUP.md",
+  "__init__.py",
+  "acquire.py",
+  "common.py",
+  "configure.py",
+  "homing.py",
+  "install.py",
+  "match.py",
+  "runner.py",
+  "schedule.py",
+  "selftest.py",
+  "state.py",
+  "uninstall.py",
+]);
+const KIT_ADAPTER_FILES = new Set(["__init__.py", "shared.py", "streeteasy.py", "zumper.py"]);
+
 const PACKAGE_ROOT = fileURLToPath(new URL("../../../agentkit/package/", import.meta.url));
 // fflate serializes DOS fields with local getters. Constructing local midnight keeps
 // the archive at the ZIP epoch in every deployment timezone.
@@ -104,11 +121,11 @@ function walk(root: string, current = root): string[] {
 }
 
 export function isRoutableKitPath(path: string): boolean {
-  if (path === "VERSION" || path === "SKILL.md") return true;
+  if (path === "VERSION" || KIT_ROOT_FILES.has(path)) return true;
   const parts = path.split("/");
-  if (parts.length !== 2 || !parts[1]) return false;
-  if (parts[0] === "references") return parts[1].endsWith(".md") && parts[1].length > 3;
-  return parts[0] === "scripts";
+  if (parts.length === 2 && parts[0] === "adapters" && parts[1])
+    return KIT_ADAPTER_FILES.has(parts[1]);
+  return path === "homing-check/SKILL.md";
 }
 
 function etagMatches(header: string | undefined, etag: string): boolean {
@@ -149,6 +166,8 @@ export function buildKitPackage(originInput: string, packageRoot = PACKAGE_ROOT)
   if (!Number.isSafeInteger(version)) throw new Error("agentkit/package/VERSION is too large");
 
   const members = [...files.keys()].filter((path) => path !== "index.md").sort();
+  if (members.some((path) => !isRoutableKitPath(path)))
+    throw new Error("agent kit contains a file outside the public allowlist");
   const manifestFiles = members.map((path) => {
     const bytes = files.get(path) as Uint8Array;
     const shape = lines(bytes);
@@ -238,26 +257,34 @@ export function createKitRouter(options: KitRouterOptions = {}): Hono {
   app.on(
     safe,
     "/agent-setup/SKILL.md",
-    () => new Response(null, { status: 301, headers: { Location: "/agent/pkg/SKILL.md" } }),
+    () => new Response(null, { status: 301, headers: { Location: "/agent/pkg/SETUP.md" } }),
   );
   app.on(safe, "/agent/pkg/VERSION", (c) =>
     publicFile(c.req.raw, "VERSION", KIT_VERSION_CACHE_SECONDS),
   );
-  app.on(safe, "/agent/pkg/SKILL.md", (c) => publicFile(c.req.raw, "SKILL.md"));
+  app.on(
+    safe,
+    "/agent/pkg/SKILL.md",
+    () => new Response(null, { status: 301, headers: { Location: "/agent/pkg/SETUP.md" } }),
+  );
+  app.on(safe, "/agent/pkg/SETUP.md", (c) => publicFile(c.req.raw, "SETUP.md"));
   app.on(safe, "/agent/pkg/manifest.json", (c) => {
     const kit = resolvePackage(c.req.raw);
     return serveKit(c.req.raw, kit.manifestBytes, "application/json", KIT_CACHE_SECONDS);
   });
   app.on(safe, "/agent/pkg/:archive", (c) => {
     const kit = resolvePackage(c.req.raw);
-    if (c.req.param("archive") !== kit.archiveName) throw notFound();
-    return serveKit(c.req.raw, kit.archiveBytes, "application/zip", KIT_CACHE_SECONDS);
+    const path = c.req.param("archive");
+    if (path === kit.archiveName)
+      return serveKit(c.req.raw, kit.archiveBytes, "application/zip", KIT_CACHE_SECONDS);
+    if (!isRoutableKitPath(path)) throw notFound();
+    return publicFile(c.req.raw, path);
   });
-  app.on(safe, "/agent/pkg/references/:name", (c) =>
-    publicFile(c.req.raw, `references/${c.req.param("name")}`),
+  app.on(safe, "/agent/pkg/adapters/:name", (c) =>
+    publicFile(c.req.raw, `adapters/${c.req.param("name")}`),
   );
-  app.on(safe, "/agent/pkg/scripts/:name", (c) =>
-    publicFile(c.req.raw, `scripts/${c.req.param("name")}`),
+  app.on(safe, "/agent/pkg/homing-check/SKILL.md", (c) =>
+    publicFile(c.req.raw, "homing-check/SKILL.md"),
   );
   app.all("/agent/*", (c) => {
     if (c.req.method === "GET" || c.req.method === "HEAD") throw notFound();

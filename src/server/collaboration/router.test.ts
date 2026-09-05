@@ -80,11 +80,8 @@ function jsonRequest(
 }
 
 describe("collaboration routes", () => {
-  it("creates a server-named project and returns role plus agent pause state", async () => {
-    const pausedUntil = new Date("2026-08-21T12:00:00.000Z");
-    const repository = new InMemoryCollaborationRepository({
-      agentPausedUntil: [{ userId: 1, pausedUntil }],
-    });
+  it("creates a server-named project and lists it with the member role", async () => {
+    const repository = new InMemoryCollaborationRepository();
     const { app } = harness(repository);
 
     const rejectedSlug = await app.request(
@@ -115,10 +112,11 @@ describe("collaboration routes", () => {
     });
 
     const listed = await app.request("/me/projects");
-    expect(await listed.json()).toMatchObject({
-      agent_paused_until: pausedUntil.toISOString(),
+    const listedBody = await listed.json();
+    expect(listedBody).toMatchObject({
       items: [{ id: projectId, role: "owner" }],
     });
+    expect(listedBody).not.toHaveProperty("agent_paused_until");
   });
 
   it("locks prompt revisions and returns the rejected draft", async () => {

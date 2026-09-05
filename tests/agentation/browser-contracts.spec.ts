@@ -164,7 +164,6 @@ test("pairing request shows agent context and records an explicit approval", asy
           timezone: "UTC",
           bio: "",
           details: {},
-          agent_paused_until: null,
         },
       }),
     });
@@ -221,7 +220,6 @@ test("manual access keys include the complete non-destructive agent scope set", 
           timezone: "UTC",
           bio: "",
           details: {},
-          agent_paused_until: null,
         },
       }),
     });
@@ -256,6 +254,7 @@ test("manual access keys include the complete non-destructive agent scope set", 
   });
 
   await page.goto("/agent-setup");
+  await page.getByText("Pairing codes", { exact: true }).click();
   await page.getByLabel("Key name").fill("Manual browser key");
   await page.getByRole("button", { name: "Create access key" }).click();
   await expect

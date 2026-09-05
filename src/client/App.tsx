@@ -20,18 +20,25 @@ import {
 } from "react-router";
 import { buildAgentSetupPrompt } from "./agentSetup";
 import {
+  type AgentProject,
+  type AgentProjectsResponse,
+  type AgentRunOutcome,
+  type AgentSourceQuery,
   ApiError,
   api,
   type Comment,
   clearCsrf,
+  fetchAgentProjects,
   type InvitationDetails,
   type Lead,
   login,
   type Me,
   type Profile,
   type Project,
+  refreshAgentSource,
   registerInvitation,
   type SourcePlanReview,
+  setAgentPause,
 } from "./api";
 import { detectedTimezone, timezoneLabel, timezoneOptions } from "./timezones";
 
@@ -45,6 +52,8 @@ type AgentTokenSummary = {
   project_ids?: string[];
   revoked_at: string | null;
   scopes?: string[];
+  protocol_version?: "v1" | "v2";
+  source_write_expires_at?: string | null;
 };
 
 const backgroundOptions = [
@@ -219,7 +228,7 @@ function LoginPage({
           />
         </label>
         <Message error={mutation.error} />
-        <button className="button primary" disabled={mutation.isPending} type="submit">
+        <button className="button" disabled={mutation.isPending} type="submit">
           {mutation.isPending ? "Signing in…" : "Sign in"}
         </button>
       </form>
@@ -287,7 +296,7 @@ function InvitationPage({ authenticated = false }: { authenticated?: boolean }) 
                 <p>Accept this invitation with the signed-in account.</p>
                 <Message error={accept.error} />
                 <button
-                  className="button primary"
+                  className="button"
                   disabled={accept.isPending}
                   onClick={() => accept.mutate()}
                   type="button"
@@ -351,7 +360,7 @@ function InvitationPage({ authenticated = false }: { authenticated?: boolean }) 
                     Use at least 12 characters. This invitation can only be used once.
                   </p>
                   <Message error={register.error} />
-                  <button className="button primary" disabled={register.isPending} type="submit">
+                  <button className="button" disabled={register.isPending} type="submit">
                     {register.isPending ? "Creating account…" : "Create account and join"}
                   </button>
                 </form>
@@ -420,7 +429,7 @@ function PairingPage() {
             <p className="quiet small">Code: {request.data.user_code}</p>
             <div className="pairing-actions">
               <button
-                className="button primary"
+                className="button"
                 disabled={decide.isPending}
                 onClick={() => decide.mutate("approve")}
                 type="button"
@@ -705,13 +714,13 @@ function Dashboard() {
             />
           </label>
           <Message error={create.error} />
-          <button className="button primary" disabled={create.isPending} type="submit">
+          <button className="button" disabled={create.isPending} type="submit">
             Create search
           </button>
         </form>
       )}
       <button
-        className="button primary dashboard-action"
+        className="button dashboard-action"
         onClick={() => setCreating((value) => !value)}
         type="button"
       >
@@ -803,14 +812,14 @@ function LeadIndex({ projectId }: { projectId: string }) {
     setSelected((current) =>
       current.includes(leadId) ? current.filter((id) => id !== leadId) : [...current, leadId],
     );
-  const setSort = (column: "price" | "source" | "days") => {
+  const setSort = (column: "price" | "days") => {
     const next = new URLSearchParams(searchParams);
     const current = searchParams.get("sort") ?? "";
     next.set("sort", current === `${column}_asc` ? `${column}_desc` : `${column}_asc`);
     next.delete("cursor");
     setSearchParams(next);
   };
-  const sortDirection = (column: "price" | "source" | "days") =>
+  const sortDirection = (column: "price" | "days") =>
     sort === `${column}_asc` ? "ascending" : sort === `${column}_desc` ? "descending" : "none";
   const allVisibleSelected = Boolean(
     leads.data?.items.length && leads.data.items.every((lead) => selected.includes(lead.id)),
@@ -898,17 +907,20 @@ function LeadIndex({ projectId }: { projectId: string }) {
               <p>{[lead.location, lead.availability].filter(Boolean).join(" · ")}</p>
               <p className="clamp">{lead.summary}</p>
               <footer>
-                <span>
+                <span className="lead-card-engagement">
                   <span aria-hidden="true">
                     {lead.interest_count ? `${lead.interest_count} ♥` : "♡"}
                   </span>
                   <span className="sr-only">{lead.interest_count ?? 0} interested</span>
+                  {Boolean(lead.comment_count) && (
+                    <>
+                      <span aria-hidden="true">|</span>
+                      <span>
+                        {lead.comment_count} {lead.comment_count === 1 ? "comment" : "comments"}
+                      </span>
+                    </>
+                  )}
                 </span>
-                {Boolean(lead.comment_count) && (
-                  <span>
-                    {lead.comment_count} {lead.comment_count === 1 ? "comment" : "comments"}
-                  </span>
-                )}
                 <label className="lead-select">
                   <span className="sr-only">Select {lead.title}</span>
                   <input
@@ -1445,7 +1457,7 @@ function Members({
               type="email"
               value={email}
             />
-            <button className="button primary" disabled={invite.isPending} type="submit">
+            <button className="button" disabled={invite.isPending} type="submit">
               {invite.isPending ? "Creating link…" : "Create invite link"}
             </button>
           </form>
@@ -1666,7 +1678,7 @@ function LeadPage() {
                 </>
               )}
             </div>
-            <a className="button primary" href={lead.data.url} target="_blank" rel="noreferrer">
+            <a className="button" href={lead.data.url} target="_blank" rel="noreferrer">
               Open listing ↗
             </a>
           </header>
@@ -1695,7 +1707,7 @@ function LeadPage() {
                     Cancel
                   </button>
                   <button
-                    className="button primary"
+                    className="button"
                     disabled={updateLead.isPending || !draftTitle.trim()}
                     onClick={() => updateLead.mutate()}
                     type="button"
@@ -1813,6 +1825,223 @@ function Placeholder({ title, children }: { title: string; children: ReactNode }
   );
 }
 
+function lifecycleProjectId(project: AgentProject): string {
+  return project.id ?? project.project_id ?? "unknown-project";
+}
+
+function lifecycleProjectName(project: AgentProject): string {
+  return project.name ?? lifecycleProjectId(project);
+}
+
+function evidenceLabel(value: string): string {
+  return value.replaceAll("_", " ");
+}
+
+function sourceLabel(source: AgentSourceQuery): string {
+  return source.adapter.replace(/-com$/, "");
+}
+
+function runOutcomeLabel(run: AgentRunOutcome | null | undefined): string {
+  if (!run) return "No run outcome reported yet.";
+  if (run.status === "started") return "In progress; no final outcome has been reported.";
+  if (run.status === "completed") return "Completed.";
+  if (run.status === "incomplete") return "Incomplete; work remains for a later run.";
+  return "Failed; this run did not complete successfully.";
+}
+
+function AgentConfigurationDetails({ project }: { project: AgentProject }) {
+  const status = project.config_status === "ready" ? "ready" : "needed";
+  const basis = project.acquisition_basis;
+  const requirements = project.required_evidence ?? [];
+  const sources = project.source_queries ?? [];
+  return (
+    <article className="agent-lifecycle-project">
+      <div className="agent-lifecycle-project-heading">
+        <h3>{lifecycleProjectName(project)}</h3>
+        <span className={`pill is-${status}`}>
+          {status === "ready" ? "Configuration ready" : "Configuration needed"}
+        </span>
+      </div>
+      {status === "needed" ? (
+        <p className="quiet small">
+          An attended setup or source refresh must confirm requirements and sources before the agent
+          can search this project.
+        </p>
+      ) : (
+        <div className="agent-lifecycle-details">
+          <div>
+            <strong>Current requirements</strong>
+            {requirements.length > 0 ? (
+              <ul>
+                {requirements.map((requirement) => (
+                  <li key={requirement}>{evidenceLabel(requirement)}</li>
+                ))}
+                {basis?.locations && basis.locations.length > 0 && (
+                  <li>Locations: {basis.locations.join(", ")}</li>
+                )}
+                {basis?.min_price_minor !== undefined || basis?.max_price_minor !== undefined ? (
+                  <li>
+                    Price:{" "}
+                    {basis.min_price_minor === null || basis.min_price_minor === undefined
+                      ? "no minimum"
+                      : `$${(basis.min_price_minor / 100).toLocaleString()}`}{" "}
+                    to{" "}
+                    {basis.max_price_minor === null || basis.max_price_minor === undefined
+                      ? "no maximum"
+                      : `$${(basis.max_price_minor / 100).toLocaleString()}`}
+                  </li>
+                ) : null}
+                {basis?.housing_types && basis.housing_types.length > 0 && (
+                  <li>Housing: {basis.housing_types.join(", ")}</li>
+                )}
+              </ul>
+            ) : (
+              <p className="quiet small">Requirements are not reported by this connection.</p>
+            )}
+          </div>
+          <div>
+            <strong>Configured sources</strong>
+            {sources.length > 0 ? (
+              <ul>
+                {sources.map((source, index) => (
+                  <li key={source.id ?? `${source.adapter}-${index}`}>
+                    {sourceLabel(source)}
+                    {source.status === "needs_review" ? " — refresh needed" : ""}
+                    {source.query?.url ? ` (${source.query.url})` : ""}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="quiet small">Sources are not reported by this connection.</p>
+            )}
+          </div>
+        </div>
+      )}
+      <div className="agent-lifecycle-run">
+        <strong>Latest run</strong>
+        <span>{runOutcomeLabel(project.latest_run)}</span>
+        {project.latest_run?.failure && (
+          <span className="quiet small">
+            {project.latest_run.failure.phase}: {project.latest_run.failure.code}
+          </span>
+        )}
+        {project.latest_run?.counts && (
+          <span className="quiet small">
+            {project.latest_run.counts.deliveries_acknowledged} deliveries acknowledged;{" "}
+            {project.latest_run.counts.deliveries_pending} pending
+          </span>
+        )}
+      </div>
+    </article>
+  );
+}
+
+function AgentLifecyclePanel({ tokens }: { tokens: AgentTokenSummary[] }) {
+  const queryClient = useQueryClient();
+  const lifecycle = useQuery({
+    queryKey: ["agent-lifecycle"],
+    queryFn: fetchAgentProjects,
+    retry: false,
+  });
+  const pause = useMutation({
+    mutationFn: (paused: boolean) => setAgentPause(paused),
+    onSuccess: (updated) => {
+      queryClient.setQueryData<AgentProjectsResponse>(["agent-lifecycle"], (current) =>
+        current ? { ...current, paused_until: updated.paused_until } : current,
+      );
+    },
+  });
+  const refresh = useMutation({
+    mutationFn: (connectionId: string) => refreshAgentSource(connectionId),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["agent-lifecycle"] }),
+        queryClient.invalidateQueries({ queryKey: ["agent-tokens"] }),
+      ]);
+    },
+  });
+
+  if (lifecycle.isLoading || lifecycle.error || !lifecycle.data) return null;
+  const pausedUntil =
+    lifecycle.data.paused_until ?? lifecycle.data.projects[0]?.paused_until ?? null;
+  const paused = Boolean(pausedUntil && Date.parse(pausedUntil) > Date.now());
+  const v2Connections = tokens.filter(
+    (token) =>
+      !token.revoked_at &&
+      (token.protocol_version === "v2" || token.scopes?.includes("agent-config:read")) &&
+      (!token.expires_at || Date.parse(token.expires_at) > Date.now()),
+  );
+  return (
+    <section aria-label="Agent lifecycle" className="agent-lifecycle">
+      <div className="agent-lifecycle-heading">
+        <div>
+          <h2>Agent lifecycle</h2>
+          <p className="quiet small">
+            Homing reports configuration and run state from the canonical server record.
+          </p>
+        </div>
+        <button
+          className="button"
+          disabled={pause.isPending}
+          onClick={() => pause.mutate(!paused)}
+          type="button"
+        >
+          {pause.isPending ? "Saving…" : paused ? "Resume agent" : "Pause agent for 14 days"}
+        </button>
+      </div>
+      <Message error={pause.error ?? refresh.error} />
+      <p className={`agent-pause-state ${paused ? "is-paused" : ""}`}>
+        {paused
+          ? `Paused until ${new Date(pausedUntil as string).toLocaleString()}. No local work should begin while paused.`
+          : "Running is enabled. A configuration-needed, incomplete, failed, or disconnected run is not treated as healthy."}
+      </p>
+      <div className="agent-lifecycle-projects">
+        {lifecycle.data.projects.length > 0 ? (
+          lifecycle.data.projects.map((project) => (
+            <AgentConfigurationDetails key={lifecycleProjectId(project)} project={project} />
+          ))
+        ) : (
+          <p className="quiet">No active projects are visible to this connection.</p>
+        )}
+      </div>
+      {v2Connections.length > 0 && (
+        <div className="agent-connection-identities">
+          <strong>Connection identity and source access</strong>
+          <ul>
+            {v2Connections.map((token) => (
+              <li key={token.id}>
+                <span>
+                  {token.name} · <code>{token.id}</code>
+                </span>
+                {token.source_write_expires_at &&
+                Date.parse(token.source_write_expires_at) > Date.now() ? (
+                  <span className="quiet small">
+                    Source setup access until{" "}
+                    <TokenDate value={token.source_write_expires_at} empty="unknown" />
+                  </span>
+                ) : (
+                  <button
+                    className="plain-button"
+                    disabled={refresh.isPending}
+                    onClick={() => refresh.mutate(token.id)}
+                    type="button"
+                  >
+                    Allow setup refresh
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+          <p className="quiet small">
+            Refresh grants source-configuration access briefly for attended repair; it does not
+            change the connection&apos;s identity or disclose the access key.
+          </p>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function AgentSetupPage() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -1823,6 +2052,7 @@ function AgentSetupPage() {
   const [pairCode, setPairCode] = useState("");
   const [newAccessKey, setNewAccessKey] = useState("");
   const [newAccessKeyId, setNewAccessKeyId] = useState("");
+  const [removalCopyStatus, setRemovalCopyStatus] = useState("");
   const tokens = useQuery({
     queryKey: ["agent-tokens"],
     queryFn: () => api<{ items: AgentTokenSummary[] }>("/auth/tokens"),
@@ -1907,11 +2137,7 @@ function AgentSetupPage() {
   const promptControls = (
     <div className="setup-prompt">
       <div className="setup-prompt-controls">
-        <button
-          className={`button${showSetupPrompt ? " primary" : ""}`}
-          type="button"
-          onClick={copySetupPrompt}
-        >
+        <button className="button" type="button" onClick={copySetupPrompt}>
           Copy setup prompt
         </button>
         <button
@@ -1948,91 +2174,207 @@ function AgentSetupPage() {
 
   return (
     <Placeholder title="Agent setup">
-      <section className="agent-pairing-entry">
-        <h2>Pair an existing agent</h2>
-        <p className="quiet">
-          Enter the six-character code shown by an agent that is waiting for approval.
-        </p>
-        <form
-          className="pairing-code-form"
-          onSubmit={(event) => {
-            event.preventDefault();
-            navigate(`/link/?code=${encodeURIComponent(pairCode.trim().toUpperCase())}`);
-          }}
-        >
-          <label>
-            Pairing code
-            <input
-              autoCapitalize="characters"
-              autoComplete="one-time-code"
-              inputMode="text"
-              maxLength={6}
-              onChange={(event) => setPairCode(event.target.value.replace(/[^a-z0-9]/gi, ""))}
-              required
-              spellCheck={false}
-              value={pairCode}
-            />
-          </label>
-          <button className="button" disabled={pairCode.trim().length < 6} type="submit">
-            Review request
-          </button>
-        </form>
-      </section>
-      <section className="manual-token-form">
-        <h2>Create a manual access key</h2>
-        <p className="quiet">
-          Use this only when pairing is unavailable. The full key is shown once.
-        </p>
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            createToken.mutate();
-          }}
-        >
-          <label>
-            Key name
-            <input
-              autoComplete="off"
-              maxLength={120}
-              onChange={(event) => setKeyName(event.target.value)}
-              required
-              value={keyName}
-            />
-          </label>
-          <Message error={createToken.error} />
-          <button
-            className="button"
-            disabled={createToken.isPending || !keyName.trim()}
-            type="submit"
-          >
-            {createToken.isPending ? "Creating…" : "Create access key"}
-          </button>
-        </form>
-        {newAccessKey && (
-          <div className="one-time-key" role="status">
-            <strong>Copy this key now. It will not be shown again.</strong>
-            <label>
-              New access key
-              <input aria-label="New access key" readOnly value={newAccessKey} />
-            </label>
-            <button
-              className="button"
-              onClick={async () => {
-                try {
-                  await navigator.clipboard.writeText(newAccessKey);
-                  setCopyStatus("Access key copied.");
-                } catch {
-                  setCopyStatus("Copy failed. Select the key manually.");
-                }
-              }}
-              type="button"
-            >
-              Copy access key
-            </button>
-            <span className="copy-status">{copyStatus}</span>
+      <AgentLifecyclePanel tokens={displayedActiveTokens} />
+      {showSetupPrompt && (
+        <section className="agent-service-entrance">
+          <h2>Give your agent a secure service entrance</h2>
+          <p>
+            Copy the setup prompt, paste it into your agent&apos;s chat window, and answer a few
+            questions. Homing will supply your agent with instructions and a unique key, which you
+            can manage from this page.
+          </p>
+          {promptControls}
+        </section>
+      )}
+      {hasActiveKey && (
+        <>
+          <section className="connection-summary">
+            <h2>
+              <span aria-hidden="true" className="connected-check">
+                ✓
+              </span>{" "}
+              Your agent is connected
+            </h2>
+            <Message error={disconnectToken.error} />
+            <p className="quiet small">
+              Disconnect revokes this Homing connection only. It cannot remove files or the
+              scheduled job on the Mac; local removal is a separate action.
+            </p>
+            <div className="agent-key-table-wrap">
+              <table className="agent-key-table">
+                <caption className="sr-only">Active agent access keys</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Connection</th>
+                    <th scope="col">Activated</th>
+                    <th scope="col">Expires</th>
+                    <th scope="col">Last used</th>
+                    <th scope="col">
+                      <span className="sr-only">Options</span>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {displayedActiveTokens.map((token) => (
+                    <tr key={token.id}>
+                      <th scope="row">
+                        {token.name}
+                        {token.prefix && (
+                          <small className="agent-key-prefix">{token.prefix}…</small>
+                        )}
+                      </th>
+                      <td>
+                        <TokenDate value={token.created_at} empty="Not reported" />
+                      </td>
+                      <td>
+                        <TokenDate value={token.expires_at} empty="Does not expire" />
+                      </td>
+                      <td>
+                        <TokenDate
+                          value={token.last_used_at}
+                          empty={token.last_used_at === undefined ? "Not reported" : "Never"}
+                        />
+                      </td>
+                      <td>
+                        <button
+                          className="plain-button disconnect-key"
+                          disabled={previewActiveKey || disconnectToken.isPending}
+                          onClick={() => disconnectToken.mutate(token.id)}
+                          type="button"
+                        >
+                          Disconnect
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="local-removal-help">
+              <strong>Remove the local installation</strong>
+              <p className="quiet small">
+                On the Mac, run the verified package&apos;s <code>python3 uninstall.py</code>{" "}
+                command. It removes only manifest-owned files and reports any residue.
+              </p>
+              <button
+                className="plain-button"
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText("python3 uninstall.py");
+                    setRemovalCopyStatus("Removal command copied.");
+                  } catch {
+                    setRemovalCopyStatus("Copy failed. Run python3 uninstall.py manually.");
+                  }
+                }}
+                type="button"
+              >
+                Copy removal command
+              </button>
+              <span className="copy-status" role="status">
+                {removalCopyStatus}
+              </span>
+            </div>
+          </section>
+          <div className="additional-agent-setup">
+            <h3>Set up another agent</h3>
+            {promptControls}
           </div>
-        )}
-      </section>
+        </>
+      )}
+      <details className="pairing-codes">
+        <summary>Pairing codes</summary>
+        <div className="pairing-codes-content">
+          <section className="agent-pairing-entry">
+            <h2>Pair an existing agent</h2>
+            <p className="quiet">
+              Enter the six-character code shown by an agent that is waiting for approval.
+            </p>
+            <form
+              className="pairing-code-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                navigate(`/link/?code=${encodeURIComponent(pairCode.trim().toUpperCase())}`);
+              }}
+            >
+              <label>
+                Pairing code
+                <input
+                  autoCapitalize="characters"
+                  autoComplete="one-time-code"
+                  inputMode="text"
+                  maxLength={6}
+                  onChange={(event) => setPairCode(event.target.value.replace(/[^a-z0-9]/gi, ""))}
+                  required
+                  spellCheck={false}
+                  value={pairCode}
+                />
+              </label>
+              <button className="button" disabled={pairCode.trim().length < 6} type="submit">
+                Review request
+              </button>
+            </form>
+          </section>
+          <section className="manual-token-form">
+            <h2>Create a manual access key</h2>
+            <p className="quiet">
+              Use this only when pairing is unavailable. The full key is shown once.
+            </p>
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                createToken.mutate();
+              }}
+            >
+              <label>
+                Key name
+                <input
+                  autoComplete="off"
+                  maxLength={120}
+                  onChange={(event) => setKeyName(event.target.value)}
+                  required
+                  value={keyName}
+                />
+              </label>
+              <Message error={createToken.error} />
+              <button
+                className="button"
+                disabled={createToken.isPending || !keyName.trim()}
+                type="submit"
+              >
+                {createToken.isPending ? "Creating…" : "Create access key"}
+              </button>
+            </form>
+            {newAccessKey && (
+              <div className="one-time-key" role="status">
+                <strong>Copy this key now. It will not be shown again.</strong>
+                <label>
+                  New access key
+                  <input aria-label="New access key" readOnly value={newAccessKey} />
+                </label>
+                <button
+                  className="button"
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(newAccessKey);
+                      setCopyStatus("Access key copied.");
+                    } catch {
+                      setCopyStatus("Copy failed. Select the key manually.");
+                    }
+                  }}
+                  type="button"
+                >
+                  Copy access key
+                </button>
+                <span className="copy-status">{copyStatus}</span>
+              </div>
+            )}
+          </section>
+        </div>
+      </details>
+      <Message error={tokens.error} />
+      {tokens.isLoading && !previewActiveKey && (
+        <p className="quiet small">Checking existing access keys…</p>
+      )}
       {import.meta.env.DEV && (
         <label className="dev-preview-toggle">
           <input
@@ -2042,84 +2384,6 @@ function AgentSetupPage() {
           />
           Preview active agent key
         </label>
-      )}
-      <Message error={tokens.error} />
-      {tokens.isLoading && !previewActiveKey && (
-        <p className="quiet small">Checking existing access keys…</p>
-      )}
-      {showSetupPrompt && (
-        <>
-          <h2>Give your agent a secure service entrance</h2>
-          <p>
-            Copy the setup prompt, paste it into your agent&apos;s chat window, and answer a few
-            questions. Homing will supply your agent with instructions and a unique key, which you
-            can manage from this page.
-          </p>
-          {promptControls}
-        </>
-      )}
-      {hasActiveKey && (
-        <>
-          <h2>
-            <span aria-hidden="true" className="connected-check">
-              ✓
-            </span>{" "}
-            Your agent is connected
-          </h2>
-          <Message error={disconnectToken.error} />
-          <div className="agent-key-table-wrap">
-            <table className="agent-key-table">
-              <caption className="sr-only">Active agent access keys</caption>
-              <thead>
-                <tr>
-                  <th scope="col">Connection</th>
-                  <th scope="col">Activated</th>
-                  <th scope="col">Expires</th>
-                  <th scope="col">Last used</th>
-                  <th scope="col">
-                    <span className="sr-only">Options</span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {displayedActiveTokens.map((token) => (
-                  <tr key={token.id}>
-                    <th scope="row">
-                      {token.name}
-                      {token.prefix && <small className="agent-key-prefix">{token.prefix}…</small>}
-                    </th>
-                    <td>
-                      <TokenDate value={token.created_at} empty="Not reported" />
-                    </td>
-                    <td>
-                      <TokenDate value={token.expires_at} empty="Does not expire" />
-                    </td>
-                    <td>
-                      <TokenDate
-                        value={token.last_used_at}
-                        empty={token.last_used_at === undefined ? "Not reported" : "Never"}
-                      />
-                    </td>
-                    <td>
-                      <button
-                        className="plain-button disconnect-key"
-                        disabled={previewActiveKey || disconnectToken.isPending}
-                        onClick={() => disconnectToken.mutate(token.id)}
-                        type="button"
-                      >
-                        Disconnect
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <div className="additional-agent-setup">
-            <h3>Set up another agent</h3>
-            {promptControls}
-          </div>
-        </>
       )}
     </Placeholder>
   );
@@ -2137,9 +2401,6 @@ function ProfileSettingsForm({ profile }: { profile: Profile }) {
   );
   const [bio, setBio] = useState(profile.bio);
   const [saveStatus, setSaveStatus] = useState("");
-  const paused = Boolean(
-    profile.agent_paused_until && Date.parse(profile.agent_paused_until) > Date.now(),
-  );
   const updateCachedProfile = (updatedProfile: Profile) => {
     queryClient.setQueryData(["profile"], updatedProfile);
     queryClient.setQueryData<Me>(["me"], (current) =>
@@ -2164,21 +2425,6 @@ function ProfileSettingsForm({ profile }: { profile: Profile }) {
       setSaveStatus("Profile saved.");
     },
   });
-  const setPause = useMutation({
-    mutationFn: (until: string | null) =>
-      api<Profile>("/me/profile", {
-        method: "PATCH",
-        mutation: true,
-        body: JSON.stringify({ agent_paused_until: until }),
-      }),
-    onSuccess: (updatedProfile) => {
-      updateCachedProfile(updatedProfile);
-      setSaveStatus(
-        updatedProfile.agent_paused_until ? "Agent activity paused." : "Agent activity resumed.",
-      );
-    },
-  });
-
   const submit = (event: FormEvent) => {
     event.preventDefault();
     setSaveStatus("");
@@ -2191,43 +2437,6 @@ function ProfileSettingsForm({ profile }: { profile: Profile }) {
 
   return (
     <section aria-label="Profile" className="panel">
-      <div className="pause-controls">
-        <div>
-          <h2>{paused ? "Search is paused" : "Agent activity"}</h2>
-          <p className="quiet">
-            {paused
-              ? "Scheduled agents will remain paused until the time shown below."
-              : "Pause scheduled agent activity if you need a quiet period."}
-          </p>
-          {paused && (
-            <p className="quiet small">
-              Paused until <TokenDate value={profile.agent_paused_until} empty="later" />.
-            </p>
-          )}
-        </div>
-        {paused ? (
-          <button
-            className="button"
-            disabled={setPause.isPending}
-            onClick={() => setPause.mutate(null)}
-            type="button"
-          >
-            {setPause.isPending ? "Resuming…" : "Resume agents"}
-          </button>
-        ) : (
-          <button
-            className="button"
-            disabled={setPause.isPending}
-            onClick={() =>
-              setPause.mutate(new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString())
-            }
-            type="button"
-          >
-            {setPause.isPending ? "Pausing…" : "Pause for 24 hours"}
-          </button>
-        )}
-        <Message error={setPause.error} />
-      </div>
       <form className="settings-form" onSubmit={submit}>
         <div className="profile-fields">
           <label>
@@ -2267,7 +2476,7 @@ function ProfileSettingsForm({ profile }: { profile: Profile }) {
         </div>
         <Message error={saveProfile.error} />
         <div className="settings-form-actions">
-          <button className="button primary" disabled={saveProfile.isPending} type="submit">
+          <button className="button" disabled={saveProfile.isPending} type="submit">
             {saveProfile.isPending ? "Saving…" : "Save profile"}
           </button>
           <span className="copy-status" role="status">

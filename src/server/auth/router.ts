@@ -282,13 +282,13 @@ function profileJson(
     timezone: profile.timezone,
     bio: profile.bio,
     details: profile.personalDetails,
-    agent_paused_until: iso(profile.agentPausedUntil),
   };
 }
 
 function tokenMetadata(token: AgentTokenRecord) {
   return {
     id: token.id,
+    protocol_version: token.scopes.some((scope) => scope === "agent-config:read") ? "v2" : "v1",
     name: token.name,
     prefix: token.tokenPrefix,
     scopes: token.scopes,
@@ -296,6 +296,7 @@ function tokenMetadata(token: AgentTokenRecord) {
     created_at: token.createdAt.toISOString(),
     last_used_at: iso(token.lastUsedAt),
     expires_at: token.expiresAt.toISOString(),
+    source_write_expires_at: iso(token.sourceWriteExpiresAt),
     revoked_at: iso(token.revokedAt),
   };
 }
@@ -788,17 +789,6 @@ export function createAuthRouter(deps: AuthRouterDependencies) {
         }
         patch.personalDetails = body.details as Record<string, unknown>;
       }
-      if (body.agent_paused_until !== undefined) {
-        if (body.agent_paused_until === null || body.agent_paused_until === "") {
-          patch.agentPausedUntil = null;
-        } else {
-          const value = new Date(String(body.agent_paused_until));
-          if (Number.isNaN(value.getTime())) {
-            throw new HomingError("validation_error", "agent_paused_until is invalid.", 422);
-          }
-          patch.agentPausedUntil = value;
-        }
-      }
       const profile = await deps.repo.updateProfile(principal.user.id, patch, nowOf(deps));
       if (!profile) throw new HomingError("not_found", "Object not found.", 404);
       return context.json(profileJson(profile));
@@ -809,14 +799,12 @@ export function createAuthRouter(deps: AuthRouterDependencies) {
     "/me/token",
     withErrors(async (context) => {
       const principal = await resolvePrincipal(context, deps);
-      const profile = await deps.repo.findProfileByUserId(principal.user.id);
       return context.json({
         id: principal.token?.id ?? null,
         name: principal.token?.name ?? "",
         scopes: principal.token?.scopes ?? AGENT_SCOPES,
         expires_at: iso(principal.token?.expiresAt),
         last_used_at: iso(principal.token?.lastUsedAt),
-        agent_paused_until: iso(profile?.agentPausedUntil),
       });
     }),
   );

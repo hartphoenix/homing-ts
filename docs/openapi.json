@@ -640,6 +640,93 @@
             }
           }
         }
+      },
+      "delete": {
+        "operationId": "delete_api_v1_me_token",
+        "summary": "DELETE /api/v1/me/token",
+        "tags": [
+          "agent-required"
+        ],
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-homing-classification": "agent-required",
+        "x-homing-csrf": false,
+        "responses": {
+          "204": {
+            "description": "No content",
+            "headers": {
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard Homing error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/me/token/finalize-setup": {
+      "post": {
+        "operationId": "post_api_v1_me_token_finalize_setup",
+        "summary": "POST /api/v1/me/token/finalize-setup",
+        "tags": [
+          "agent-required"
+        ],
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-homing-classification": "agent-required",
+        "x-homing-csrf": false,
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": {
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard Homing error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/auth/tokens": {
@@ -882,6 +969,588 @@
             }
           }
         },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": {
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard Homing error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent/projects": {
+      "get": {
+        "operationId": "get_api_v1_agent_projects",
+        "summary": "GET /api/v1/agent/projects",
+        "tags": [
+          "agent-required"
+        ],
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-homing-classification": "agent-required",
+        "x-homing-csrf": false,
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": {
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard Homing error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project}/config-revisions": {
+      "post": {
+        "operationId": "post_api_v1_projects_project_config_revisions",
+        "summary": "POST /api/v1/projects/{project}/config-revisions",
+        "tags": [
+          "agent-required"
+        ],
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-homing-classification": "agent-required",
+        "x-homing-csrf": false,
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "headers": {
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard Homing error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project}/config-revisions/{revision}": {
+      "get": {
+        "operationId": "get_api_v1_projects_project_config_revisions_revision",
+        "summary": "GET /api/v1/projects/{project}/config-revisions/{revision}",
+        "tags": [
+          "agent-required"
+        ],
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-homing-classification": "agent-required",
+        "x-homing-csrf": false,
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "in": "path",
+            "name": "revision",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": {
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard Homing error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project}/source-query-revisions/{query}": {
+      "get": {
+        "operationId": "get_api_v1_projects_project_source_query_revisions_query",
+        "summary": "GET /api/v1/projects/{project}/source-query-revisions/{query}",
+        "tags": [
+          "agent-required"
+        ],
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-homing-classification": "agent-required",
+        "x-homing-csrf": false,
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "in": "path",
+            "name": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": {
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard Homing error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent-runs": {
+      "post": {
+        "operationId": "post_api_v1_agent_runs",
+        "summary": "POST /api/v1/agent-runs",
+        "tags": [
+          "agent-required"
+        ],
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-homing-classification": "agent-required",
+        "x-homing-csrf": false,
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "headers": {
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard Homing error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/agent-runs/{run}": {
+      "patch": {
+        "operationId": "patch_api_v1_agent_runs_run",
+        "summary": "PATCH /api/v1/agent-runs/{run}",
+        "tags": [
+          "agent-required"
+        ],
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-homing-classification": "agent-required",
+        "x-homing-csrf": false,
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": {
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard Homing error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{project}/leads/create-or-return-existing": {
+      "post": {
+        "operationId": "post_api_v1_projects_project_leads_create_or_return_existing",
+        "summary": "POST /api/v1/projects/{project}/leads/create-or-return-existing",
+        "tags": [
+          "agent-required"
+        ],
+        "security": [
+          {
+            "cookieSession": []
+          },
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-homing-classification": "agent-required",
+        "x-homing-csrf": false,
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": {
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard Homing error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/me/agent-pause": {
+      "put": {
+        "operationId": "put_api_v1_me_agent_pause",
+        "summary": "PUT /api/v1/me/agent-pause",
+        "tags": [
+          "browser-required"
+        ],
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "x-homing-classification": "browser-required",
+        "x-homing-csrf": true,
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": {
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard Homing error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/tokens/{connection}/source-refresh": {
+      "post": {
+        "operationId": "post_api_v1_auth_tokens_connection_source_refresh",
+        "summary": "POST /api/v1/auth/tokens/{connection}/source-refresh",
+        "tags": [
+          "browser-required"
+        ],
+        "security": [
+          {
+            "cookieSession": []
+          }
+        ],
+        "x-homing-classification": "browser-required",
+        "x-homing-csrf": true,
+        "parameters": [
+          {
+            "in": "path",
+            "name": "connection",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-CSRF-Token",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Success",
@@ -4583,10 +5252,10 @@
         }
       }
     },
-    "/agent/pkg/SKILL.md": {
+    "/agent/pkg/SETUP.md": {
       "get": {
-        "operationId": "get_agent_pkg_SKILL_md",
-        "summary": "GET /agent/pkg/SKILL.md",
+        "operationId": "get_agent_pkg_SETUP_md",
+        "summary": "GET /agent/pkg/SETUP.md",
         "tags": [
           "public"
         ],
@@ -4624,8 +5293,8 @@
         }
       },
       "head": {
-        "operationId": "head_agent_pkg_SKILL_md",
-        "summary": "HEAD /agent/pkg/SKILL.md",
+        "operationId": "head_agent_pkg_SETUP_md",
+        "summary": "HEAD /agent/pkg/SETUP.md",
         "tags": [
           "public"
         ],
@@ -4825,105 +5494,10 @@
         }
       }
     },
-    "/agent/pkg/references/{name}": {
+    "/agent/pkg/adapters/{name}": {
       "get": {
-        "operationId": "get_agent_pkg_references_name",
-        "summary": "GET /agent/pkg/references/{name}",
-        "tags": [
-          "public"
-        ],
-        "security": [],
-        "x-homing-classification": "public",
-        "x-homing-csrf": false,
-        "parameters": [
-          {
-            "in": "path",
-            "name": "name",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 1
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success",
-            "headers": {
-              "X-Request-ID": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            }
-          },
-          "default": {
-            "description": "Standard Homing error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          }
-        }
-      },
-      "head": {
-        "operationId": "head_agent_pkg_references_name",
-        "summary": "HEAD /agent/pkg/references/{name}",
-        "tags": [
-          "public"
-        ],
-        "security": [],
-        "x-homing-classification": "public",
-        "x-homing-csrf": false,
-        "parameters": [
-          {
-            "in": "path",
-            "name": "name",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 1
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Success",
-            "headers": {
-              "X-Request-ID": {
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "default": {
-            "description": "Standard Homing error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/agent/pkg/scripts/{name}": {
-      "get": {
-        "operationId": "get_agent_pkg_scripts_name",
-        "summary": "GET /agent/pkg/scripts/{name}",
+        "operationId": "get_agent_pkg_adapters_name",
+        "summary": "GET /agent/pkg/adapters/{name}",
         "tags": [
           "public"
         ],
@@ -4972,8 +5546,8 @@
         }
       },
       "head": {
-        "operationId": "head_agent_pkg_scripts_name",
-        "summary": "HEAD /agent/pkg/scripts/{name}",
+        "operationId": "head_agent_pkg_adapters_name",
+        "summary": "HEAD /agent/pkg/adapters/{name}",
         "tags": [
           "public"
         ],
@@ -4991,6 +5565,79 @@
             }
           }
         ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": {
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard Homing error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/agent/pkg/homing-check/SKILL.md": {
+      "get": {
+        "operationId": "get_agent_pkg_homing_check_SKILL_md",
+        "summary": "GET /agent/pkg/homing-check/SKILL.md",
+        "tags": [
+          "public"
+        ],
+        "security": [],
+        "x-homing-classification": "public",
+        "x-homing-csrf": false,
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": {
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "text/markdown": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Standard Homing error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "head": {
+        "operationId": "head_agent_pkg_homing_check_SKILL_md",
+        "summary": "HEAD /agent/pkg/homing-check/SKILL.md",
+        "tags": [
+          "public"
+        ],
+        "security": [],
+        "x-homing-classification": "public",
+        "x-homing-csrf": false,
         "responses": {
           "200": {
             "description": "Success",

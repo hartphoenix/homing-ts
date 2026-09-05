@@ -14,7 +14,6 @@ test("aligns project glass containers within the shared content column", async (
           timezone: "America/New_York",
           bio: "",
           details: {},
-          agent_paused_until: null,
         },
       }),
     });
@@ -57,6 +56,8 @@ test("aligns project glass containers within the shared content column", async (
   expect(main.width).toBeCloseTo(700, 0);
   expect(header.width).toBeCloseTo(main.width, 0);
   expect(tabs.width).toBeCloseTo(main.width, 0);
+  const title = await page.locator("header.page-heading h1").boundingBox();
+  expect(title?.width).toBeCloseTo((header?.width ?? 0) - 34, 0);
   await expect(page.getByLabel("Search leads")).toHaveCSS(
     "background-color",
     "rgba(255, 253, 247, 0.75)",

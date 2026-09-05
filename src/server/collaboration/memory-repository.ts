@@ -76,7 +76,6 @@ export class InMemoryCollaborationRepository implements CollaborationRepository 
   private interests = new Set<string>();
   private comments = new Map<number, CommentRecord>();
   private idempotency = new Map<string, IdempotencyRecord>();
-  private agentPausedUntil = new Map<number, Date>();
   private nextCommentId = 1;
   private nextPromptId = 1;
 
@@ -90,7 +89,6 @@ export class InMemoryCollaborationRepository implements CollaborationRepository 
       interests?: Array<{ projectId: string; leadId: string; userId: number }>;
       comments?: CommentRecord[];
       idempotency?: IdempotencyRecord[];
-      agentPausedUntil?: Array<{ userId: number; pausedUntil: Date }>;
     } = {},
   ) {
     for (const project of seed.projects ?? []) this.projects.set(project.id, copy(project));
@@ -121,8 +119,6 @@ export class InMemoryCollaborationRepository implements CollaborationRepository 
         this.idempotencyKey(record.userId, record.tokenId, record.endpoint, record.key),
         copy(record),
       );
-    for (const pause of seed.agentPausedUntil ?? [])
-      this.agentPausedUntil.set(pause.userId, copy(pause.pausedUntil));
   }
 
   private membershipKey(projectId: string, userId: number): string {
@@ -160,7 +156,6 @@ export class InMemoryCollaborationRepository implements CollaborationRepository 
       interests: new Set(this.interests),
       comments: copyMap(this.comments),
       idempotency: copyMap(this.idempotency),
-      agentPausedUntil: copyMap(this.agentPausedUntil),
       nextCommentId: this.nextCommentId,
       nextPromptId: this.nextPromptId,
     };
@@ -175,7 +170,6 @@ export class InMemoryCollaborationRepository implements CollaborationRepository 
       this.interests = snapshot.interests;
       this.comments = snapshot.comments;
       this.idempotency = snapshot.idempotency;
-      this.agentPausedUntil = snapshot.agentPausedUntil;
       this.nextCommentId = snapshot.nextCommentId;
       this.nextPromptId = snapshot.nextPromptId;
       throw error;
@@ -192,11 +186,6 @@ export class InMemoryCollaborationRepository implements CollaborationRepository 
         Boolean(project && project.status === "active"),
       )
       .map(copy);
-  }
-
-  async getAgentPausedUntil(userId: number): Promise<Date | null> {
-    const value = this.agentPausedUntil.get(userId);
-    return value ? copy(value) : null;
   }
 
   async getProject(projectId: string): Promise<ProjectRecord | null> {

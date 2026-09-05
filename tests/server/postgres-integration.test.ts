@@ -1,21 +1,21 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
-import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { createServer } from "node:net";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { buildKitPackage } from "../../src/server/agent/kit";
 import {
   createPostgresProjectAuthorizer,
   PostgresAgentRepository,
 } from "../../src/server/agent/postgres-repository";
 import { type AgentPrincipal, digest, RunService } from "../../src/server/agent/runs";
+import { canonicalJsonBytes, canonicalJsonSha256 } from "../../src/server/agent/v2/canonical";
+import { sourceQueryIdentity } from "../../src/server/agent/v2/identities";
+import { PostgresV2Repository } from "../../src/server/agent/v2/postgres-repository";
+import type { CreateRunInput, RunSnapshotProject } from "../../src/server/agent/v2/repository";
+import type { AgentRunReport, RequiredEvidenceKey } from "../../src/server/agent/v2/schemas";
 import { DrizzleAuthRepository } from "../../src/server/auth/drizzle-repository";
 import { verifyImportedPassword } from "../../src/server/auth/password";
 import { PostgresCollaborationRepository } from "../../src/server/collaboration/postgres-repository";
@@ -35,6 +35,7 @@ describePostgres("PostgreSQL concurrency invariants", () => {
   let runs: RunService;
   let collaboration: PostgresCollaborationRepository;
   let auth: DrizzleAuthRepository;
+  let v2: PostgresV2Repository;
 
   beforeAll(() => {
     sqlClient = postgres(databaseUrl as string, {
@@ -49,6 +50,9 @@ describePostgres("PostgreSQL concurrency invariants", () => {
       createPostgresProjectAuthorizer(sqlClient),
     );
     const database = drizzle(sqlClient, { schema });
+    v2 = new PostgresV2Repository(
+      database as ConstructorParameters<typeof PostgresV2Repository>[0],
+    );
     collaboration = new PostgresCollaborationRepository(
       database as ConstructorParameters<typeof PostgresCollaborationRepository>[0],
     );
@@ -101,6 +105,58 @@ describePostgres("PostgreSQL concurrency invariants", () => {
          now() + interval '30 days')
     `;
   });
+
+  async function createV2Snapshot(): Promise<RunSnapshotProject> {
+    const acquisitionBasis = { locations: ["Brooklyn"] };
+    const sourceQuery = { url: "https://www.zumper.com/homes/brooklyn" };
+    const acquisitionBasisHash = canonicalJsonSha256(acquisitionBasis);
+    const sourcePayload = {
+      version: 1,
+      adapter: "zumper-com" as const,
+      query: sourceQuery,
+      acquisition_basis_hash: acquisitionBasisHash,
+    };
+    const requiredEvidence: RequiredEvidenceKey[] = [
+      "location",
+      "price",
+      "availability",
+      "housing_type",
+    ];
+    const config = await v2.createConfigRevision({
+      userId: 1,
+      projectId,
+      expectedRevision: 1,
+      requiredEvidence,
+      acquisitionBasis,
+      sourceQueries: [
+        {
+          adapter: "zumper-com",
+          normalizedQuery: sourceQuery,
+          queryIdentity: sourceQueryIdentity(projectId, "zumper-com", sourceQuery),
+          acquisitionBasisHash,
+          canonicalBytes: canonicalJsonBytes(sourcePayload),
+          canonicalSha256: canonicalJsonSha256(sourcePayload),
+        },
+      ],
+    });
+    const queryId = config.sourceQueryIds[0];
+    if (!queryId) throw new Error("v2 config did not create a source query");
+    const query = await v2.getSourceQueryRevision(1, projectId, queryId);
+    if (!query) throw new Error("v2 source query disappeared after creation");
+    return {
+      projectId,
+      promptRevisionId: config.id,
+      promptRevision: config.revision,
+      canonicalSha256: config.canonicalSha256,
+      queries: [
+        {
+          sourceQueryRevisionId: query.id,
+          sourceQueryRevision: query.revision,
+          canonicalSha256: query.canonicalSha256,
+        },
+      ],
+    };
+  }
 
   afterAll(async () => {
     await sqlClient?.end({ timeout: 5 });
@@ -179,6 +235,350 @@ describePostgres("PostgreSQL concurrency invariants", () => {
     expect(sequenceState).toEqual({ latest: "5", total: "5", distinct_total: "5" });
   });
 
+  it("replays concurrent v2 invocation creation without duplicate runs", async () => {
+    const snapshot = await createV2Snapshot();
+    const input: CreateRunInput = {
+      userId: 1,
+      tokenId: tokenOne,
+      invocationId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      agentLabel: "postgres/v2-integrity",
+      projects: [snapshot],
+    };
+    const results = await Promise.all(Array.from({ length: 8 }, () => v2.createRun(input)));
+    expect(new Set(results.map((result) => result.run.id)).size).toBe(1);
+    expect(results.filter((result) => !result.replayed)).toHaveLength(1);
+    expect(results.filter((result) => result.replayed)).toHaveLength(7);
+  });
+
+  it("serializes v2 run creation behind project removal", async () => {
+    const snapshot = await createV2Snapshot();
+    const input: CreateRunInput = {
+      userId: 1,
+      tokenId: tokenOne,
+      invocationId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+      agentLabel: "postgres/v2-removal-race",
+      projects: [snapshot],
+    };
+    let releaseTrash!: () => void;
+    let trashLocked!: () => void;
+    const trashReady = new Promise<void>((resolve) => {
+      trashLocked = resolve;
+    });
+    const trashRelease = new Promise<void>((resolve) => {
+      releaseTrash = resolve;
+    });
+    const trash = collaboration.transaction(async (transaction) => {
+      await transaction.assertOwner(projectId, 1);
+      trashLocked();
+      await trashRelease;
+      await transaction.updateProject(projectId, { status: "trashed" });
+    });
+    await trashReady;
+    const creating = v2.createRun(input);
+    await delay(25);
+    releaseTrash();
+    await trash;
+    await expect(creating).rejects.toMatchObject({ code: "not_found", status: 404 });
+    const [runCount] = await sqlClient`
+      select count(*)::text as count from agent_runs where invocation_id = ${input.invocationId}
+    `;
+    expect(runCount?.count).toBe("0");
+    await collaboration.updateProject(projectId, { status: "active" });
+  });
+
+  it("replays a normalized terminal report and rejects started finalization", async () => {
+    const snapshot = await createV2Snapshot();
+    const input: CreateRunInput = {
+      userId: 1,
+      tokenId: tokenOne,
+      invocationId: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+      agentLabel: "postgres/v2-finalize-replay",
+      projects: [snapshot],
+    };
+    const created = await v2.createRun(input);
+    const [snapshotQuery] = snapshot.queries;
+    if (!snapshotQuery) throw new Error("v2 snapshot must include a source query");
+    const report: AgentRunReport = {
+      status: "completed",
+      phase: "finish",
+      queries: [
+        {
+          source_query_revision_id: snapshotQuery.sourceQueryRevisionId,
+          status: "completed",
+        },
+      ],
+      counts: {
+        source_queries_total: 1,
+        source_queries_attempted: 1,
+        source_queries_completed: 1,
+        candidates_observed: 0,
+        candidates_evaluated: 0,
+        candidates_kept: 0,
+        candidates_insufficient: 0,
+        deliveries_acknowledged: 0,
+        deliveries_pending: 0,
+      },
+      failure: null,
+    };
+    const first = await v2.finalizeRun(1, tokenOne, created.run.id, report);
+    expect(first.replayed).toBe(false);
+    const [reportQuery] = report.queries;
+    if (!reportQuery) throw new Error("run report must include a source query");
+    const replay = await v2.finalizeRun(1, tokenOne, created.run.id, {
+      ...report,
+      queries: [{ ...reportQuery, error_class: null }],
+    });
+    expect(replay.replayed).toBe(true);
+    await expect(
+      v2.finalizeRun(1, tokenOne, created.run.id, { ...report, status: "started" }),
+    ).rejects.toMatchObject({ code: "validation_error", status: 422 });
+  });
+
+  it("rejects v2 replay and finalization after membership removal", async () => {
+    const snapshot = await createV2Snapshot();
+    const input: CreateRunInput = {
+      userId: 1,
+      tokenId: tokenOne,
+      invocationId: "abababab-abab-4aba-8aba-abababababab",
+      agentLabel: "postgres/v2-revoked-member",
+      projects: [snapshot],
+    };
+    const created = await v2.createRun(input);
+    await collaboration.transaction(async (transaction) => {
+      await transaction.changeMembershipRole(projectId, 1, "editor", 2);
+      await transaction.removeMembershipSafely(projectId, 1, 2);
+    });
+    await expect(v2.createRun(input)).rejects.toMatchObject({ code: "not_found", status: 404 });
+
+    const [snapshotQuery] = snapshot.queries;
+    if (!snapshotQuery) throw new Error("v2 snapshot must include a source query");
+    await expect(
+      v2.finalizeRun(1, tokenOne, created.run.id, {
+        status: "completed",
+        phase: "finish",
+        queries: [
+          { source_query_revision_id: snapshotQuery.sourceQueryRevisionId, status: "completed" },
+        ],
+        counts: {
+          source_queries_total: 1,
+          source_queries_attempted: 1,
+          source_queries_completed: 1,
+          candidates_observed: 0,
+          candidates_evaluated: 0,
+          candidates_kept: 0,
+          candidates_insufficient: 0,
+          deliveries_acknowledged: 0,
+          deliveries_pending: 0,
+        },
+        failure: null,
+      }),
+    ).rejects.toMatchObject({ code: "not_found", status: 404 });
+  });
+
+  it("resolves concurrent source-query creation without a unique-race error", async () => {
+    const acquisitionBasis = { locations: ["Brooklyn"] };
+    const sourceQuery = { url: "https://www.zumper.com/homes/brooklyn" };
+    const attempts = await Promise.allSettled(
+      Array.from({ length: 8 }, () =>
+        v2.createConfigRevision({
+          userId: 1,
+          projectId,
+          expectedRevision: 1,
+          requiredEvidence: ["location", "price", "availability", "housing_type"],
+          acquisitionBasis,
+          sourceQueries: [
+            {
+              adapter: "zumper-com",
+              normalizedQuery: sourceQuery,
+              queryIdentity: sourceQueryIdentity(projectId, "zumper-com", sourceQuery),
+              acquisitionBasisHash: canonicalJsonSha256(acquisitionBasis),
+              canonicalBytes: canonicalJsonBytes({
+                version: 1,
+                adapter: "zumper-com",
+                query: sourceQuery,
+                acquisition_basis_hash: canonicalJsonSha256(acquisitionBasis),
+              }),
+              canonicalSha256: canonicalJsonSha256({
+                version: 1,
+                adapter: "zumper-com",
+                query: sourceQuery,
+                acquisition_basis_hash: canonicalJsonSha256(acquisitionBasis),
+              }),
+            },
+          ],
+        }),
+      ),
+    );
+    expect(attempts.filter((attempt) => attempt.status === "fulfilled")).toHaveLength(1);
+    const rejected = attempts.filter((attempt) => attempt.status === "rejected");
+    expect(rejected).toHaveLength(7);
+    expect(
+      rejected.every(
+        (attempt) =>
+          (attempt.reason as { code?: unknown }).code === "conflict" &&
+          (attempt.reason as { status?: unknown }).status === 409,
+      ),
+    ).toBe(true);
+    const [sourceCount] = await sqlClient`
+      select count(*)::text as count
+        from source_query_revisions
+       where project_id = ${projectId}
+    `;
+    expect(sourceCount?.count).toBe("1");
+  });
+
+  it("resolves concurrent absent-lead deliveries to one lead and one observation", async () => {
+    const snapshot = await createV2Snapshot();
+    const input = {
+      userId: 1,
+      tokenId: tokenOne,
+      projectId,
+      promptRevisionId: snapshot.promptRevisionId,
+      promptRevision: snapshot.promptRevision,
+      factsHash: "e".repeat(64),
+      disposition: "kept" as const,
+      reason: "meets requirements",
+      unknowns: [],
+      lead: {
+        source: "zumper-com" as const,
+        sourceListingId: "concurrent-delivery-1",
+        canonicalUrl: "https://example.test/concurrent-delivery-1",
+        title: "Concurrent delivery",
+        summary: "",
+        location: "Brooklyn",
+        priceDisplay: "$2,500",
+        priceAmount: "2500.00",
+        priceCurrency: "USD",
+        availability: "now",
+        housingType: "entire" as const,
+        listedAt: null,
+        attributes: {},
+        verificationNotes: "",
+      },
+    };
+    const results = await Promise.all(Array.from({ length: 8 }, () => v2.deliver(input)));
+    expect(new Set(results.map((result) => result.leadId)).size).toBe(1);
+    expect(new Set(results.map((result) => result.observationId)).size).toBe(1);
+    expect(results.filter((result) => result.status === "created")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "existing")).toHaveLength(7);
+    const [counts] = await sqlClient`
+      select
+        (select count(*)::text from leads where project_id = ${projectId}) as leads,
+        (select count(*)::text from match_observations where project_id = ${projectId}) as observations
+    `;
+    expect(counts).toEqual({ leads: "1", observations: "1" });
+  });
+
+  it("rejects cross-project v2 references at the database boundary", async () => {
+    const otherProjectId = "88888888-8888-4888-8888-888888888888";
+    await sqlClient`
+      insert into projects
+        (id, name, slug, current_prompt, criteria, creator_id, prompt_revision, feed_epoch)
+      values
+        (${otherProjectId}, 'Other project', 'other-project', 'Other prompt', '{}'::jsonb, 1, 1, 'other')
+    `;
+    const [otherRevision] = await sqlClient`
+      insert into prompt_revisions (project_id, revision, prompt, criteria, editor_id)
+      values (${otherProjectId}, 1, 'Other prompt', '{}'::jsonb, 1)
+      returning id
+    `;
+    const snapshot = await createV2Snapshot();
+    const sourceQueryId = snapshot.queries[0]?.sourceQueryRevisionId;
+    if (!sourceQueryId || snapshot.promptRevisionId === null || !otherRevision?.id) {
+      throw new Error("incomplete v2 isolation fixture");
+    }
+    await expect(
+      sqlClient`
+        insert into prompt_revision_source_queries
+          (project_id, prompt_revision_id, source_query_revision_id, position)
+        values (${otherProjectId}, ${snapshot.promptRevisionId}, ${sourceQueryId}, 0)
+      `,
+    ).rejects.toThrow();
+    await expect(
+      sqlClient`
+        update projects
+           set current_config_revision_id = ${otherRevision.id}
+         where id = ${projectId}
+      `,
+    ).rejects.toThrow();
+  });
+
+  it("returns a typed conflict when an invocation is replayed with another snapshot", async () => {
+    const snapshot = await createV2Snapshot();
+    const input: CreateRunInput = {
+      userId: 1,
+      tokenId: tokenOne,
+      invocationId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      agentLabel: "postgres/v2-integrity",
+      projects: [snapshot],
+    };
+    await v2.createRun(input);
+    const changedSnapshot: RunSnapshotProject = {
+      ...snapshot,
+      canonicalSha256: "f".repeat(64),
+    };
+    await expect(v2.createRun({ ...input, projects: [changedSnapshot] })).rejects.toMatchObject({
+      code: "conflict",
+      status: 409,
+    });
+  });
+
+  it("rejects duplicate snapshot entries as a typed conflict", async () => {
+    const snapshot = await createV2Snapshot();
+    const input: CreateRunInput = {
+      userId: 1,
+      tokenId: tokenOne,
+      invocationId: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      agentLabel: "postgres/v2-integrity",
+      projects: [snapshot, snapshot],
+    };
+    await expect(v2.createRun(input)).rejects.toMatchObject({ code: "conflict", status: 409 });
+  });
+
+  it("requires submitted source queries to be configured and ready", async () => {
+    const snapshot = await createV2Snapshot();
+    const query = snapshot.queries[0];
+    if (!query) throw new Error("v2 snapshot has no source query");
+    const input: CreateRunInput = {
+      userId: 1,
+      tokenId: tokenOne,
+      invocationId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      agentLabel: "postgres/v2-integrity",
+      projects: [snapshot],
+    };
+    const foreignQuerySnapshot: RunSnapshotProject = {
+      ...snapshot,
+      queries: [
+        {
+          ...query,
+          sourceQueryRevisionId: "99999999-9999-4999-8999-999999999999",
+        },
+      ],
+    };
+    await expect(
+      v2.createRun({ ...input, projects: [foreignQuerySnapshot] }),
+    ).rejects.toMatchObject({
+      code: "conflict",
+      status: 409,
+    });
+
+    await sqlClient`
+      update source_query_revisions set status = 'needs_review'
+       where id = ${query.sourceQueryRevisionId}
+    `;
+    await expect(v2.createRun(input)).rejects.toMatchObject({ code: "conflict", status: 409 });
+  });
+
+  it("does not expose historical v2 configuration for an inactive project", async () => {
+    const snapshot = await createV2Snapshot();
+    const queryId = snapshot.queries[0]?.sourceQueryRevisionId;
+    if (!queryId || snapshot.promptRevisionId === null) throw new Error("incomplete v2 snapshot");
+    await collaboration.updateProject(projectId, { status: "trashed" });
+    expect(await v2.listProjects(1)).toEqual([]);
+    expect(await v2.getConfigRevision(1, projectId, snapshot.promptRevision)).toBeNull();
+    expect(await v2.getSourceQueryRevision(1, projectId, queryId)).toBeNull();
+  });
+
   it("serializes final-owner changes and optimistic prompt revisions", async () => {
     const ownerChanges = await Promise.allSettled([
       collaboration.transaction((transaction) =>
@@ -204,6 +604,103 @@ describePostgres("PostgreSQL concurrency invariants", () => {
     expect(promptChanges.filter((result) => result.status === "rejected")).toHaveLength(1);
     expect((await collaboration.getProject(projectId))?.promptRevision).toBe(2);
     expect(await collaboration.listPromptRevisions(projectId)).toHaveLength(2);
+  });
+
+  it("keeps the current v2 configuration aligned across text and acquisition edits", async () => {
+    const sourceQuery = { url: "https://www.zumper.com/homes/brooklyn" };
+    const acquisitionBasis = { locations: ["Brooklyn"] };
+    const sourcePayload = {
+      version: 1,
+      adapter: "zumper-com",
+      query: sourceQuery,
+      acquisition_basis_hash: canonicalJsonSha256(acquisitionBasis),
+    };
+    const sourceBytes = canonicalJsonBytes(sourcePayload);
+    const configPayload = {
+      version: 1,
+      prompt: "Find a place",
+      criteria: { city: "Brooklyn" },
+      required_evidence: ["location", "price", "availability", "housing_type"],
+      acquisition_basis: acquisitionBasis,
+      source_queries: [],
+    };
+    const [source] = await sqlClient`
+      insert into source_query_revisions
+        (project_id, adapter, revision, normalized_query, query_identity,
+         acquisition_basis_hash, canonical_bytes, canonical_sha256, status)
+      values
+        (${projectId}, 'zumper-com', 1, ${JSON.stringify(sourceQuery)}::jsonb,
+         ${canonicalJsonSha256({ project_id: projectId, adapter: "zumper-com", query: sourceQuery })},
+         ${canonicalJsonSha256(acquisitionBasis)}, ${sourceBytes}, ${canonicalJsonSha256(sourcePayload)}, 'ready')
+      returning id
+    `;
+    const configWithRef = {
+      ...configPayload,
+      source_queries: [
+        { id: source?.id, revision: 1, sha256: canonicalJsonSha256(sourcePayload), position: 0 },
+      ],
+    };
+    const configBytes = canonicalJsonBytes(configWithRef);
+    const [config] = await sqlClient`
+      insert into prompt_revisions
+        (project_id, revision, prompt, criteria, config_status, required_evidence,
+         acquisition_basis, canonical_bytes, canonical_sha256, editor_id)
+      values
+        (${projectId}, 2, 'Find a place', ${JSON.stringify({ city: "Brooklyn" })}::jsonb, 'complete',
+         ${JSON.stringify(configPayload.required_evidence)}::jsonb,
+         ${JSON.stringify(acquisitionBasis)}::jsonb, ${configBytes}, ${canonicalJsonSha256(configWithRef)}, 1)
+      returning id
+    `;
+    await sqlClient`
+      insert into prompt_revision_source_queries (project_id, prompt_revision_id, source_query_revision_id, position)
+      values (${projectId}, ${config?.id}, ${source?.id}, 0)
+    `;
+    await sqlClient`
+      update projects set prompt_revision = 2, current_config_revision_id = ${config?.id}
+      where id = ${projectId}
+    `;
+
+    const textEdit = await collaboration.transaction((transaction) =>
+      transaction.updatePrompt(projectId, 2, "Find a place with transit", { city: "Brooklyn" }, 1),
+    );
+    expect(textEdit.revision.revision).toBe(3);
+    const [textConfig] = await sqlClient`
+      select config_status, canonical_sha256, required_evidence, acquisition_basis
+        from prompt_revisions where id = (select current_config_revision_id from projects where id = ${projectId})
+    `;
+    expect(textConfig?.config_status).toBe("complete");
+    expect(textConfig?.required_evidence).toEqual(configPayload.required_evidence);
+
+    const acquisitionEdit = await collaboration.transaction((transaction) =>
+      transaction.updatePrompt(projectId, 3, "Find a place with transit", { city: "Queens" }, 1),
+    );
+    expect(acquisitionEdit.revision.revision).toBe(4);
+    const [reviewConfig] = await sqlClient`
+      select config_status from prompt_revisions
+       where project_id = ${projectId} and revision = 4
+    `;
+    const reviewSources = await sqlClient`
+      select source.status
+        from prompt_revision_source_queries link
+        join source_query_revisions source on source.id = link.source_query_revision_id
+       where link.project_id = ${projectId}
+         and link.prompt_revision_id = (select id from prompt_revisions where project_id = ${projectId} and revision = 4)
+    `;
+    expect(reviewConfig?.config_status).toBe("needs_review");
+    expect(reviewSources).toEqual([{ status: "needs_review" }]);
+
+    const reverted = await collaboration.transaction((transaction) =>
+      transaction.updatePrompt(projectId, 4, "Find a place with transit", { city: "Brooklyn" }, 1),
+    );
+    expect(reverted.revision.revision).toBe(5);
+    const [revertedSource] = await sqlClient`
+      select source.id, source.status
+        from prompt_revision_source_queries link
+        join source_query_revisions source on source.id = link.source_query_revision_id
+       where link.project_id = ${projectId}
+         and link.prompt_revision_id = ${reverted.revision.id}
+    `;
+    expect(revertedSource).toEqual({ id: source?.id, status: "ready" });
   });
 
   it("linearizes membership revocation before a content authorization check", async () => {
@@ -1083,310 +1580,6 @@ describePostgres("PostgreSQL concurrency invariants", () => {
       expect(changed.stderr).toContain("Recorded import does not match the complete frozen source");
     } finally {
       await sqlClient`drop schema if exists django_source cascade`;
-    }
-  }, 30_000);
-
-  it("runs the unchanged Python client through the production adapters", async () => {
-    const workspace = await mkdtemp(join(tmpdir(), "homing-real-client-"));
-    const password = "fixture password";
-    await sqlClient`update users set password_hash = ${pbkdf2Fixture} where id = 1`;
-
-    const port = await new Promise<number>((resolve, reject) => {
-      const reservation = createServer();
-      reservation.once("error", reject);
-      reservation.listen(0, "127.0.0.1", () => {
-        const address = reservation.address();
-        if (!address || typeof address === "string") {
-          reservation.close();
-          reject(new Error("Could not reserve a local port."));
-          return;
-        }
-        reservation.close((error) => (error ? reject(error) : resolve(address.port)));
-      });
-    });
-    const origin = `http://127.0.0.1:${port}`;
-    const outputLog: string[] = [];
-    const serverLog: string[] = [];
-    const redactions = new Set<string>();
-    const scriptPath = join(workspace, "homing.py");
-    const tokenPath = join(workspace, "token");
-    const runDirectory = join(workspace, "run");
-    const clientEnvironment = Object.fromEntries(
-      Object.entries(process.env).filter(
-        (entry): entry is [string, string] => entry[1] !== undefined,
-      ),
-    );
-    Object.assign(clientEnvironment, {
-      HOMING_TOKEN_STORE: "file",
-      HOMING_TOKEN_FILE: tokenPath,
-      HOMING_RUN_DIR: runDirectory,
-      XDG_CONFIG_HOME: join(workspace, "xdg"),
-    });
-    const serverEnvironment = {
-      ...clientEnvironment,
-      DATABASE_URL: databaseUrl as string,
-      PUBLIC_ORIGIN: origin,
-      AUTH_THROTTLE_KEY: "homing-real-client-test-throttle-key",
-      PORT: String(port),
-      NODE_ENV: "test",
-    };
-    const serverProcess = spawn("bun", ["src/server/index.ts"], {
-      cwd: process.cwd(),
-      env: serverEnvironment,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    serverProcess.stdout.on("data", (chunk) => serverLog.push(String(chunk)));
-    serverProcess.stderr.on("data", (chunk) => serverLog.push(String(chunk)));
-
-    const runClient = async (...args: string[]) => {
-      const child = spawn("python3", [scriptPath, ...args], {
-        cwd: workspace,
-        env: clientEnvironment,
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      let stdout = "";
-      let stderr = "";
-      child.stdout.on("data", (chunk) => {
-        stdout += String(chunk);
-      });
-      child.stderr.on("data", (chunk) => {
-        stderr += String(chunk);
-      });
-      const [exitCode] = (await once(child, "close")) as [number | null];
-      outputLog.push(stdout, stderr);
-      const safeDiagnostics = [...redactions].reduce(
-        (text, value) => text.replaceAll(value, "[redacted]"),
-        `${stderr}\n${serverLog.join("\n")}`,
-      );
-      expect(exitCode, `${args[0] ?? "client"} failed: ${safeDiagnostics.slice(-2_000)}`).toBe(0);
-      return JSON.parse(stdout.trim().split("\n").at(-1) ?? "{}") as Record<string, unknown>;
-    };
-
-    try {
-      const kit = buildKitPackage(origin);
-      const script = kit.files.get("scripts/homing.py");
-      expect(script).toBeTruthy();
-      await writeFile(scriptPath, script as Uint8Array);
-      await chmod(scriptPath, 0o700);
-
-      let ready = false;
-      for (let attempt = 0; attempt < 50; attempt += 1) {
-        try {
-          const response = await fetch(`${origin}/health/ready`);
-          if (response.ok) {
-            ready = true;
-            break;
-          }
-        } catch {
-          // The Bun server is still starting.
-        }
-        await delay(50);
-      }
-      expect(ready, "The production server did not become ready.").toBe(true);
-
-      const pairingPath = join(workspace, "pairing.json");
-      const devicePath = join(workspace, "device-code");
-      const resultPath = join(workspace, "pair-result.json");
-      const pairing = await runClient(
-        "pair-request",
-        "--label",
-        "Postgres real-client test",
-        "--out",
-        pairingPath,
-        "--device-code-out",
-        devicePath,
-      );
-      const deviceCode = (await readFile(devicePath, "utf8")).trim();
-      redactions.add(deviceCode);
-      expect((await stat(devicePath)).mode & 0o077).toBe(0);
-
-      const csrfResponse = await fetch(`${origin}/api/v1/csrf`);
-      const csrfBody = (await csrfResponse.json()) as { csrf_token: string };
-      let cookie = (csrfResponse.headers.get("set-cookie") ?? "").split(";", 1)[0] as string;
-      const loginResponse = await fetch(`${origin}/api/v1/session`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Cookie: cookie,
-          Origin: origin,
-          "X-CSRF-Token": csrfBody.csrf_token,
-        },
-        body: JSON.stringify({ email: "one@example.test", password }),
-      });
-      expect(loginResponse.status).toBe(200);
-      const loginBody = (await loginResponse.json()) as { csrf_token: string };
-      cookie = (loginResponse.headers.get("set-cookie") ?? "").split(";", 1)[0] as string;
-      const approval = await fetch(
-        `${origin}/api/v1/auth/agent-links/${String(pairing.user_code)}`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Cookie: cookie,
-            Origin: origin,
-            "X-CSRF-Token": loginBody.csrf_token,
-          },
-          body: JSON.stringify({ action: "approve" }),
-        },
-      );
-      expect(approval.status).toBe(200);
-
-      const pairResult = await runClient(
-        "pair-poll",
-        "--device-code-file",
-        devicePath,
-        "--store",
-        "--result",
-        resultPath,
-        "--timeout",
-        "10",
-        "--interval",
-        "1",
-      );
-      expect(pairResult).toMatchObject({ paired: true, stored: true, verified: true });
-      const rawToken = (await readFile(tokenPath, "utf8")).trim();
-      redactions.add(rawToken);
-      expect((await stat(tokenPath)).mode & 0o077).toBe(0);
-      expect(outputLog.join("\n")).not.toContain(deviceCode);
-      expect(outputLog.join("\n")).not.toContain(rawToken);
-      expect(serverLog.join("\n")).not.toContain(deviceCode);
-      expect(serverLog.join("\n")).not.toContain(rawToken);
-
-      const projects = await runClient("projects");
-      expect(projects).toMatchObject({ count: 1, projects: [{ id: projectId }] });
-      const cursorPath = join(workspace, "cursor");
-      const initialChanges = await runClient(
-        "changes",
-        "--project",
-        projectId,
-        "--cursor-file",
-        cursorPath,
-      );
-      expect(initialChanges.next_cursor).toBe("testepoch:0");
-
-      const createdRun = await runClient(
-        "run-create",
-        "--project",
-        projectId,
-        "--agent-label",
-        "postgres/real-client",
-        "--input-cursor",
-        "testepoch:0",
-        "--idempotency-key",
-        "real-client-create",
-      );
-      const runId = String(createdRun.run_id);
-      const claimed = await runClient("run-claim", "--project", projectId, "--run", runId);
-      expect(claimed.claimed).toBe(true);
-
-      const leadsPath = join(workspace, "leads.json");
-      await writeFile(
-        leadsPath,
-        JSON.stringify({
-          items: [
-            {
-              source: "real-client",
-              source_listing_id: "x".repeat(300),
-              url: "https://example.test/real-client",
-              title: "Real client lead",
-              price_display: "p".repeat(200),
-              observed_at: "2026-08-20T16:00:00",
-            },
-          ],
-        }),
-      );
-      const upserted = await runClient(
-        "leads-upsert",
-        "--project",
-        projectId,
-        "--items-file",
-        leadsPath,
-        "--run-id",
-        runId,
-      );
-      expect(upserted).toMatchObject({ counts: { created: 1, errors: 0, verify_failed: 0 } });
-      const [lead] = await sqlClient<Array<{ id: string }>>`
-        select id from leads where project_id = ${projectId} and source = 'real-client'
-      `;
-      expect(lead?.id).toBeTruthy();
-      const commentPath = join(workspace, "comment.txt");
-      await writeFile(commentPath, "Seen by the real client.");
-      expect(
-        await runClient(
-          "comment-add",
-          "--project",
-          projectId,
-          "--lead",
-          String(lead?.id),
-          "--body-file",
-          commentPath,
-        ),
-      ).toMatchObject({ ok: true });
-
-      const completionPath = join(workspace, "completion.json");
-      await writeFile(
-        completionPath,
-        JSON.stringify({
-          output_cursor: "testepoch:4",
-          continuation: { protocol: 1, lanes: [], deferred_batches: 0 },
-          result_counts: { created: 1, trashed: 0, restored: 0 },
-          summary: "Real-client integration complete.",
-        }),
-      );
-      expect(
-        await runClient(
-          "run-complete",
-          "--project",
-          projectId,
-          "--run",
-          runId,
-          "--payload-file",
-          completionPath,
-        ),
-      ).toMatchObject({ ok: true, status: "completed" });
-
-      const changed = await runClient(
-        "changes",
-        "--project",
-        projectId,
-        "--cursor-file",
-        cursorPath,
-      );
-      expect((changed.items as unknown[]).length).toBeGreaterThan(0);
-      await writeFile(cursorPath, "999");
-      const reset = await runClient("changes", "--project", projectId, "--cursor-file", cursorPath);
-      expect(reset).toMatchObject({ cursor_expired: true, state_reset: 1 });
-      expect((await readFile(cursorPath, "utf8")).startsWith("testepoch:")).toBe(true);
-
-      await collaboration.transaction((transaction) =>
-        transaction.updatePrompt(projectId, 1, "Find the repaired fit", { city: "Queens" }, 1),
-      );
-      const reported = await runClient(
-        "source-review-report",
-        "--project",
-        projectId,
-        "--prompt-revision",
-        "2",
-      );
-      const review = reported.review as { id: string };
-      expect(await runClient("source-reviews")).toMatchObject({ count: 1 });
-      expect(
-        await runClient(
-          "source-review-resolve",
-          "--project",
-          projectId,
-          "--review",
-          review.id,
-          "--prompt-revision",
-          "2",
-        ),
-      ).toMatchObject({ review: { status: "resolved" } });
-    } finally {
-      if (serverProcess.exitCode === null) {
-        serverProcess.kill("SIGTERM");
-        await Promise.race([once(serverProcess, "exit"), delay(2_000)]);
-      }
-      await rm(workspace, { recursive: true, force: true });
     }
   }, 30_000);
 });

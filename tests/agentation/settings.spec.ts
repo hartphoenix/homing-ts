@@ -6,7 +6,6 @@ test("edits the production profile fields and manages connection history", async
     timezone: "America/New_York",
     bio: "Looking for a durable home base.",
     details: { accessibility: "Few stairs preferred" },
-    agent_paused_until: null,
   };
   let savedProfile: Record<string, unknown> | undefined;
   let revokedTokenId = "";
@@ -81,6 +80,8 @@ test("edits the production profile fields and manages connection history", async
   await expect(page.getByLabel("Bio")).toHaveValue("Looking for a durable home base.");
   await expect(page.getByText("Few stairs preferred")).toHaveCount(0);
   await expect(page.getByLabel("Personal details")).toHaveCount(0);
+  await expect(page.getByText("Agent activity", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /Pause|Resume/ })).toHaveCount(0);
 
   await page.getByLabel("Display name").fill("Hart Phoenix");
   await page.getByLabel("Timezone").selectOption("Europe/Paris");

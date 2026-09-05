@@ -4,6 +4,7 @@ import { Hono } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { z } from "zod";
 
+import { acquisitionBasisSchema } from "../agent/v2/schemas";
 import { errorResponse, HomingError } from "../http";
 import { isBoundedJson } from "../json-limits";
 import type {
@@ -67,6 +68,7 @@ const promptSchema = z
   .object({
     prompt: z.string().max(30_000),
     criteria,
+    acquisition_basis: acquisitionBasisSchema.optional(),
     expected_revision: z.number().int().min(0).max(2_147_483_647),
   })
   .strict();
@@ -577,11 +579,9 @@ export function createCollaborationRouter(dependencies: CollaborationDependencie
         ),
       ),
     );
-    const pausedUntil = await repository.getAgentPausedUntil(principal.userId);
     return json(context, 200, {
       items,
       projects: items,
-      agent_paused_until: pausedUntil?.toISOString() ?? null,
     });
   });
 
@@ -804,6 +804,7 @@ export function createCollaborationRouter(dependencies: CollaborationDependencie
           body.prompt,
           body.criteria,
           principal.userId,
+          body.acquisition_basis,
         );
         await transaction.recordMutation(
           projectId,

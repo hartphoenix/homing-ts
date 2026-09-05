@@ -1,11 +1,11 @@
 # Homing TypeScript
 
-Greenfield TypeScript replacement for the Django Homing application. Humans use the React
-interface; recurring search agents use the versioned `/api/v1` contract. The Python agent-kit
-payload is vendored unchanged under `agentkit/package/`.
+TypeScript Homing application. Humans use the React interface; recurring v2 search agents use the
+versioned `/api/v1` contract. The reviewed Python v2 agent-kit payload is vendored under
+`agentkit/package/` and published from this repository.
 
-The Django repository at `../homing` remains the behavioral reference and rollback source during
-the replacement sprint.
+The Django repository at `../homing` is behavioral evidence only. It is not a production deployment
+or rollback target.
 
 ## Development
 
@@ -34,3 +34,6 @@ bun run test
 bun run build
 bun run test:e2e
 ```
+
+The public agent lifecycle is documented in [the v2 build specification](docs/build-spec.md),
+[the lifecycle plan](docs/agent-kit-lifecycle-plan.md), and the generated [API contract](docs/openapi.json).

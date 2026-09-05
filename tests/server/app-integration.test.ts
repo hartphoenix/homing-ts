@@ -69,7 +69,7 @@ describe("production router composition", () => {
       collaboration: { repository: new InMemoryCollaborationRepository() },
     });
 
-    const kit = await app.request("/agent/pkg/SKILL.md");
+    const kit = await app.request("/agent/pkg/SETUP.md");
     expect(kit.status).toBe(200);
     expect(kit.headers.get("content-type")).toContain("text/markdown");
 
@@ -93,7 +93,7 @@ describe("production router composition", () => {
     expect(await nestedKitMiss.json()).toMatchObject({ error: { code: "not_found" } });
     const redirect = await app.request("/agent-setup/SKILL.md");
     expect(redirect.status).toBe(301);
-    expect(redirect.headers.get("location")).toBe("/agent/pkg/SKILL.md");
+    expect(redirect.headers.get("location")).toBe("/agent/pkg/SETUP.md");
     const setupHead = await app.request("/agent-setup", { method: "HEAD" });
     expect(setupHead.status).toBe(200);
     expect(setupHead.headers.get("content-type")).toContain("text/html");

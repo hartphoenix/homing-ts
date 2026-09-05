@@ -15,7 +15,7 @@ import {
   users,
 } from "../db/schema";
 import type { AuthRepository } from "./repository";
-import { AGENT_SCOPE_SET, type AgentScope } from "./scopes";
+import { AGENT_SCOPE_SET, type AgentScope, V2_AGENT_SCOPE_SET } from "./scopes";
 import type {
   AgentLinkPollResult,
   AgentLinkRecord,
@@ -70,7 +70,9 @@ function sessionRecord(row: SessionRow): SessionRecord {
 }
 
 function scopes(value: string[]): AgentScope[] {
-  return value.filter((scope): scope is AgentScope => AGENT_SCOPE_SET.has(scope));
+  return value.filter(
+    (scope): scope is AgentScope => AGENT_SCOPE_SET.has(scope) || V2_AGENT_SCOPE_SET.has(scope),
+  );
 }
 
 function tokenRecord(row: TokenRow): AgentTokenRecord {
@@ -85,6 +87,7 @@ function tokenRecord(row: TokenRow): AgentTokenRecord {
     expectedCadenceMinutes: row.expectedCadenceMinutes,
     environmentNote: row.environmentNote,
     exposedToChat: row.exposedToChat,
+    sourceWriteExpiresAt: row.sourceWriteExpiresAt,
     expiresAt: row.expiresAt,
     revokedAt: row.revokedAt,
     lastUsedAt: row.lastUsedAt,
@@ -107,6 +110,7 @@ function linkRecord(row: LinkRow): AgentLinkRecord {
     lastPolledAt: row.lastPolledAt,
     approvedById: row.approvedById,
     issuedTokenId: row.issuedTokenId,
+    protocolVersion: row.protocolVersion,
     createdAt: row.createdAt,
   };
 }
@@ -123,6 +127,7 @@ function tokenInsert(input: CreateTokenInput) {
     expectedCadenceMinutes: input.expectedCadenceMinutes,
     environmentNote: input.environmentNote,
     exposedToChat: input.exposedToChat,
+    sourceWriteExpiresAt: input.sourceWriteExpiresAt ?? null,
     expiresAt: input.expiresAt,
     ...(input.createdAt ? { createdAt: input.createdAt } : {}),
   };
@@ -633,6 +638,7 @@ export class DrizzleAuthRepository implements AuthRepository {
           agentLabel: input.agentLabel,
           environmentNote: input.environmentNote,
           requestedCadenceMinutes: input.requestedCadenceMinutes,
+          protocolVersion: input.protocolVersion ?? "v1",
           expiresAt: input.expiresAt,
           intervalSeconds: input.intervalSeconds,
         })

@@ -15,7 +15,6 @@ test("edits the brief without exposing its structured JSON", async ({ page }) =>
           timezone: "America/New_York",
           bio: "",
           details: {},
-          agent_paused_until: null,
         },
       }),
     });
